@@ -1280,7 +1280,6 @@ should_repair: false
             slot.rc_proc = proc
             slot.rc_pid = proc.pid
         record_telemetry("INFO", "RC_SPAWNED", f"PID {proc.pid} spawned with user-data-root {slot.data_dir}", slot.client_ip, slot.slot_num, slot.slot_id, extra={"rc_pid": proc.pid})
-        threading.Thread(target=suppress_electron_ui_for_slot, args=(slot, generation), daemon=True).start()
 
         rc_port, rc_token = None, None
         for _ in range(45):
@@ -1418,6 +1417,7 @@ should_repair: false
                         elapsed = time.time() - t_start
                         record_telemetry("INFO", "SLOT_READY", f"LCU online (PID {pid}, AppPort {app_port}) in {elapsed:.1f}s", slot.client_ip, slot.slot_num, slot.slot_id, extra={"lc_pid": pid, "app_port": app_port, "elapsed_s": round(elapsed, 2), "proxy_port": slot.proxy_port, "lcu_port": slot.lcu_port})
                         threading.Thread(target=capture_game_engine_loop, args=(slot,), daemon=True).start()
+                        threading.Thread(target=suppress_electron_ui_for_slot, args=(slot, generation), daemon=True).start()
                         return
             except Exception:
                 pass
