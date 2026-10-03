@@ -29,7 +29,7 @@ client.exec_command('cp /Users/m1/vanta_orchestrator.py /Users/m1/vanta-auth/app
 
 # Restart service cleanly
 stdin, stdout, stderr = client.exec_command('''
-launchctl kickstart -k gui/501/com.vanta.orchestrator 2>/dev/null || (pkill -9 -f "vanta_orchestrator.py"; nohup python3 /Users/m1/vanta_orchestrator.py >/Users/m1/orchestrator.log 2>&1 &)
+echo PNGGJHc5f7f1 | sudo -S launchctl kickstart -k system/com.vanta.orchestrator
 ''')
 print("RESTART OUTPUT:\n" + stdout.read().decode('utf-8', errors='replace'))
 

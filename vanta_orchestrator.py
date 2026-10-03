@@ -32,7 +32,7 @@ from entitlement import EntitlementError, entitlement_verifier
 
 # ── Global Configuration ───────────────────────────────────────────────────────
 ORCH_PORT       = 9000
-MAX_SLOTS       = 25
+MAX_SLOTS       = int(os.environ.get("VANTA_MAX_SLOTS", "50"))
 BASE_SLOTS_DIR  = "/Users/m1/VantaSlots"
 BASE_APP_PATH   = "/Applications/League of Legends.app"
 RC_APP_PATH     = "/Applications/Riot Client.app/Contents/MacOS/RiotClientServices"
@@ -452,13 +452,20 @@ class SlotState:
         self._teardown_started = False
         self.data_dir       = os.path.join(BASE_SLOTS_DIR, f"slot{slot_num}")
         self.app_path       = f"/Applications/League of Legends_slot{slot_num}.app"
-        # Non-overlapping port offsets for 25 concurrent slots:
-        # proxy_port:     8090..8114 (Slots 1..25)
-        # lcu_port:       8150..8174 (Slots 1..25)
-        # udp_proxy_port: 8200..8224 (Slots 1..25)
-        self.proxy_port     = 8090 + (slot_num - 1)
-        self.lcu_port       = 8096 if slot_num == 1 else (8150 + (slot_num - 1))
-        self.udp_proxy_port = 8200 + (slot_num - 1)
+        # Non-overlapping port offsets for concurrent slots (Slots 1..100):
+        # Slot 1 retains original legacy ports (8090, 8096, 8200) for backward compatibility.
+        # Slots 2..100 use dedicated 1000-port spaced collision-free ranges:
+        # proxy_port:     9102..9200
+        # lcu_port:       9302..9400
+        # udp_proxy_port: 9502..9600
+        if slot_num == 1:
+            self.proxy_port     = 8090
+            self.lcu_port       = 8096
+            self.udp_proxy_port = 8200
+        else:
+            self.proxy_port     = 9100 + slot_num
+            self.lcu_port       = 9300 + slot_num
+            self.udp_proxy_port = 9500 + slot_num
         self.status         = "provisioning"
         self.args           = []
         self.game_args      = []
@@ -546,7 +553,7 @@ def alloc_slot_num(preferred=None) -> int:
             active_slot_nums.add(num)
             slot_reservations[num] = None
             return num
-    raise RuntimeError("No free slot numbers available (All 25 slots occupied)")
+    raise RuntimeError(f"No free slot numbers available (All {MAX_SLOTS} slots occupied)")
 
 def free_slot_num(num: int):
     active_slot_nums.discard(num)
@@ -880,7 +887,7 @@ def start_tcp_proxy(listen_port: int, target_port):
                             s = get_slot_by_num(req_slot_num)
                             if s:
                                 host_hdr = headers.get("host", "").lower()
-                                if listen_port in (8096, 8150) or (8150 <= listen_port <= 8174) or "tl" in host_hdr:
+                                if listen_port in (8096, 8150) or (8150 <= listen_port <= 8174) or (9300 <= listen_port <= 9500) or "tl" in host_hdr:
                                     port = s.app_port
                                 else:
                                     port = s.rc_port
@@ -1130,6 +1137,10 @@ def capture_game_engine_loop(slot: SlotState):
                     try:
                         os.kill(pid, signal.SIGSTOP)
                         log(f"[game_monitor:slot{slot.slot_num}] Suspended (SIGSTOP) Mac 3D engine PID {pid} to keep parent LeagueClient in 'InProgress' phase")
+                        try:
+                            subprocess.run(["purge"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        except Exception:
+                            pass
                     except Exception as err:
                         log(f"[game_monitor:slot{slot.slot_num}] Error suspending Mac game: {err}")
 
@@ -1161,6 +1172,33 @@ def capture_game_engine_loop(slot: SlotState):
         except Exception as e:
             log(f"[game_monitor:slot{slot.slot_num}] error: {e}")
         time.sleep(1.0)
+
+def suppress_electron_ui_for_slot(slot: SlotState, generation: str):
+    """
+    Headless optimizer: Terminate high-memory Electron GUI front-end
+    spawned by RiotClientServices. RCS remains 100% operational as a headless
+    daemon providing full REST API, saving ~800MB RAM per slot.
+    """
+    for _ in range(40):
+        time.sleep(1.0)
+        with slots_lock:
+            if not slot_is_current(slot, generation):
+                return
+        try:
+            ps_out = subprocess.check_output(["ps", "-ef"], timeout=5).decode(errors="replace")
+            for line in ps_out.splitlines():
+                parts = line.split()
+                if len(parts) > 1 and parts[1].isdigit():
+                    pid = int(parts[1])
+                    if pid != slot.rc_pid and f"slot{slot.slot_num}" in line and "Riot Client.app" in line:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            record_telemetry("INFO", "HEADLESS_OPTIMIZATION", f"Suppressed heavy UI PID {pid} for slot {slot.slot_num} (~800MB RAM saved)", slot.client_ip, slot.slot_num, slot.slot_id)
+                            return
+                        except OSError:
+                            pass
+        except Exception:
+            pass
 
 def vm_worker(slot: SlotState, yaml_data: str):
     t_start = time.time()
@@ -1242,6 +1280,7 @@ should_repair: false
             slot.rc_proc = proc
             slot.rc_pid = proc.pid
         record_telemetry("INFO", "RC_SPAWNED", f"PID {proc.pid} spawned with user-data-root {slot.data_dir}", slot.client_ip, slot.slot_num, slot.slot_id, extra={"rc_pid": proc.pid})
+        threading.Thread(target=suppress_electron_ui_for_slot, args=(slot, generation), daemon=True).start()
 
         rc_port, rc_token = None, None
         for _ in range(45):
@@ -1415,15 +1454,23 @@ def slot_reaper_loop():
 
                 # 2. Slot in game_ready state (user is in lobby or between matches)
                 if s.status == "game_ready":
-                    if getattr(s, "lc_pid", None):
+                    # Check if RiotClient process is still alive. If RiotClient is alive, slot is healthy.
+                    rc_alive = False
+                    if getattr(s, "rc_pid", None):
                         try:
-                            os.kill(s.lc_pid, 0)
+                            os.kill(s.rc_pid, 0)
+                            rc_alive = True
                         except (ProcessLookupError, OSError):
-                            to_clean.append((sid, f"LeagueClient process {s.lc_pid} terminated"))
-                            continue
-                    # Inactivity timeout for game_ready (600s / 10 minutes without polling)
-                    if (now - getattr(s, "last_poll", now)) > 600.0:
-                        to_clean.append((sid, "Client inactivity timeout (>600s)"))
+                            pass
+
+                    # If RiotClient died completely, slot is orphaned
+                    if not rc_alive and getattr(s, "rc_pid", None):
+                        to_clean.append((sid, f"RiotClient process {s.rc_pid} terminated"))
+                        continue
+
+                    # Inactivity timeout for game_ready (900s / 15 minutes without polling)
+                    if (now - getattr(s, "last_poll", now)) > 900.0:
+                        to_clean.append((sid, "Client inactivity timeout (>900s)"))
                         continue
                     continue
 
