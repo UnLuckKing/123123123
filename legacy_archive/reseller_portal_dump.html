@@ -1,0 +1,605 @@
+HTML_RESELLER_PORTAL = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VANTA // Reseller Partner Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #07090e;
+            --surface: #0e121a;
+            --surface-card: #131824;
+            --surface-hover: #192030;
+            --surface-border: #1f2738;
+            --accent: #00f2fe;
+            --accent-glow: rgba(0, 242, 254, 0.35);
+            --danger: #ff3366;
+            --warning: #ffaa00;
+            --success: #00ffaa;
+            --text-main: #f0f4fc;
+            --text-dim: #7e8ba6;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            min-height: 100vh;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1200px;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--surface-border);
+            margin-bottom: 24px;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand h1 {
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: #fff;
+        }
+        .brand span {
+            color: var(--accent);
+            text-shadow: 0 0 10px var(--accent-glow);
+        }
+        .badge {
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .badge-partner { background: rgba(0, 242, 254, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+        .badge-vip { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid #a855f7; }
+        .badge-success { background: rgba(0, 255, 170, 0.15); color: var(--success); border: 1px solid var(--success); }
+        .badge-warning { background: rgba(255, 170, 0, 0.15); color: var(--warning); border: 1px solid var(--warning); }
+        
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .credits-pill {
+            background: var(--surface-card);
+            border: 1px solid var(--surface-border);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .credits-pill b { color: var(--warning); font-size: 15px; }
+
+        /* Auth Screen */
+        #authSection {
+            max-width: 440px;
+            margin: 80px auto;
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: 14px;
+            padding: 36px;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+        }
+        #authSection h2 { font-size: 20px; margin-bottom: 8px; }
+        #authSection p { color: var(--text-dim); font-size: 14px; margin-bottom: 24px; }
+        
+        .form-control {
+            width: 100%;
+            background: #090c13;
+            border: 1px solid var(--surface-border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+            margin-bottom: 16px;
+        }
+        .form-control:focus { border-color: var(--accent); }
+
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+            font-family: 'Outfit', sans-serif;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+            color: #000;
+        }
+        .btn-primary:hover { box-shadow: 0 0 15px var(--accent-glow); transform: translateY(-1px); }
+        .btn-action { background: var(--surface-card); color: #fff; border: 1px solid var(--surface-border); }
+        .btn-action:hover { background: var(--surface-hover); border-color: var(--accent); }
+        .btn-danger { background: rgba(255, 51, 102, 0.15); color: var(--danger); border: 1px solid var(--danger); }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+        /* Dashboard Screen */
+        #portalSection { display: none; width: 100%; }
+        
+        .kpi-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .kpi-card {
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        .kpi-title { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .kpi-value { font-size: 26px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+
+        .panels-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        @media (max-width: 900px) { .panels-grid { grid-template-columns: 1fr; } }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: 12px;
+            padding: 24px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--surface-border);
+        }
+        .card-header h3 { font-size: 16px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+
+        .form-group { margin-bottom: 16px; text-align: left; }
+        .form-group label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; }
+
+        .table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--surface-border);
+            border-radius: 10px;
+            background: var(--surface);
+        }
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+        th { background: #0c0f17; color: var(--text-dim); font-size: 11px; padding: 12px 14px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--surface-border); }
+        td { padding: 12px 14px; border-bottom: 1px solid var(--surface-border); font-family: 'JetBrains Mono', monospace; }
+        tr:hover td { background: var(--surface-hover); }
+
+        .status-pill { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .status-active { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .status-expired { background: var(--danger); }
+
+        .api-snippet {
+            background: #06080d;
+            border: 1px solid var(--surface-border);
+            border-radius: 8px;
+            padding: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: #79c0ff;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--surface-card);
+            border: 1px solid var(--accent);
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            display: none;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <h1>VANTA <span>// RESELLER</span></h1>
+                <span class="badge badge-partner">Partner Portal</span>
+            </div>
+            <div class="header-actions" id="topBarUser" style="display:none;">
+                <div class="credits-pill">
+                    AVAILABLE: <b id="resellerCredits">0</b> CREDITS
+                </div>
+                <button class="btn btn-action btn-sm" onclick="logoutReseller()">Sign Out</button>
+            </div>
+        </header>
+
+        <!-- Login Screen -->
+        <div id="authSection">
+            <h2>Partner Portal Sign In</h2>
+            <p>Enter your Vanta Reseller Partner Access Key to manage client licenses and balance.</p>
+            <input type="text" class="form-control" id="resellerKeyInput" placeholder="VANTA-RES-XXXXXXXXXXXXXXXX" onkeydown="if(event.key==='Enter') loginReseller()">
+            <button class="btn btn-primary" style="width:100%;" onclick="loginReseller()">Access Partner Console</button>
+        </div>
+
+        <!-- Dashboard Screen -->
+        <div id="portalSection">
+            <div class="kpi-row">
+                <div class="kpi-card">
+                    <div class="kpi-title">Account Balance</div>
+                    <div class="kpi-value" style="color:var(--warning);" id="kpiCredits">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-title">Issued Licenses</div>
+                    <div class="kpi-value" style="color:var(--accent);" id="kpiKeysCount">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-title">Active Subscriptions</div>
+                    <div class="kpi-value" style="color:var(--success);" id="kpiActiveCount">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-title">Partner Status</div>
+                    <div class="kpi-value" style="color:#fff;" id="kpiStatus">ACTIVE</div>
+                </div>
+            </div>
+
+            <div class="panels-grid">
+                <!-- Mint Key Panel -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>⚡ Mint Customer License</h3>
+                        <span class="badge badge-partner">1 Credit / Key</span>
+                    </div>
+                    <div class="form-group">
+                        <label>License Duration</label>
+                        <select class="form-control" id="mintDays">
+                            <option value="1">1 Day Access (1 Credit)</option>
+                            <option value="7">7 Days Weekly (1 Credit)</option>
+                            <option value="30" selected>30 Days Monthly (1 Credit)</option>
+                            <option value="365">1 Year / Lifetime (1 Credit)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Customer Tier / Role</label>
+                        <select class="form-control" id="mintRole">
+                            <option value="user">Standard User (Match Bypass)</option>
+                            <option value="vip">VIP Member (Priority VM Queue)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Buyer Reference / Discord Tag</label>
+                        <input type="text" class="form-control" id="mintNote" placeholder="e.g. Discord: user#1234 / Order #509">
+                    </div>
+                    <button class="btn btn-primary" style="width:100%;" onclick="generateKey()">Generate Single Key</button>
+                    <button class="btn btn-action" style="width:100%; margin-top:8px; border-color:var(--warning); color:var(--warning);" onclick="openBulkMintModal()">📦 Bulk Mint for Store Stock</button>
+                </div>
+
+                <!-- API Integration & Webhook Panel -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🤖 Automated Store Integration</h3>
+                        <span class="badge badge-vip">REST API v1</span>
+                    </div>
+                    <p style="font-size:13px; color:var(--text-dim); margin-bottom:10px;">
+                        Connect your Sellix, Shoppy, Tebex, or custom Discord bot for 100% automated key delivery upon payment:
+                    </p>
+                    <div class="form-group">
+                        <label>Your Bearer Token</label>
+                        <input type="text" class="form-control" id="apiTokenDisplay" readonly onclick="copyText(this.value)">
+                    </div>
+                    <div class="form-group">
+                        <label>Webhook / API Command Snippet</label>
+                        <div class="api-snippet" id="apiCurlSnippet">Loading API configuration...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Client Keys Table -->
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <h3>📋 My Issued Customer Keys</h3>
+                    <div style="display:flex; gap:10px;">
+                        <input type="text" class="form-control" style="margin-bottom:0; width:260px; padding:6px 12px; font-size:13px;" id="keySearchInput" placeholder="Search key or note..." onkeyup="renderTable()">
+                        <button class="btn btn-action btn-sm" onclick="loadResellerData()">🔄 Refresh</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>LICENSE KEY</th>
+                                <th>PLAN</th>
+                                <th>CUSTOMER REF</th>
+                                <th>BOUND HWID</th>
+                                <th>STATUS</th>
+                                <th>EXPIRES AT</th>
+                                <th>ACTIONS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="keysTableBody">
+                            <tr><td colspan="7" style="text-align:center; color:var(--text-dim);">Loading client keys...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Mint Modal -->
+    <div style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:9999; justify-content:center; align-items:center;" id="bulkModal">
+        <div style="background:var(--surface); border:1px solid var(--surface-border); border-radius:14px; padding:28px; width:100%; max-width:550px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="color:#fff;">📦 Bulk Mint Licenses (Store Stock)</h3>
+                <span style="cursor:pointer; color:#aaa; font-size:20px;" onclick="closeBulkMintModal()">✕</span>
+            </div>
+            <div class="form-group">
+                <label>Number of Keys to Mint</label>
+                <select class="form-control" id="bulkCount">
+                    <option value="5">5 Keys (5 Credits)</option>
+                    <option value="10" selected>10 Keys (10 Credits)</option>
+                    <option value="25">25 Keys (25 Credits)</option>
+                    <option value="50">50 Keys (50 Credits)</option>
+                    <option value="100">100 Keys (100 Credits)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Plan Duration</label>
+                <select class="form-control" id="bulkDays">
+                    <option value="1">1 Day Access</option>
+                    <option value="7">7 Days Access</option>
+                    <option value="30" selected>30 Days Access</option>
+                    <option value="365">1 Year / Lifetime</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Stock Order Note / Batch ID</label>
+                <input type="text" class="form-control" id="bulkNote" placeholder="e.g. Sellix Stock Batch #4">
+            </div>
+            <button class="btn btn-primary" style="width:100%;" onclick="executeBulkMint()">⚡ Confirm & Mint Stock</button>
+
+            <!-- Results Output Area -->
+            <div id="bulkResultsBox" style="display:none; margin-top:16px;">
+                <label style="font-size:12px; color:var(--success); font-weight:700;">✅ Stock Generated Successfully! (Line-by-Line format for Sellix/Shoppy):</label>
+                <textarea class="form-control" id="bulkOutputArea" rows="6" readonly style="font-size:12px; margin-top:6px;"></textarea>
+                <div style="display:flex; gap:10px;">
+                    <button class="btn btn-action btn-sm" style="flex:1;" onclick="copyBulkStock()">📋 Copy All to Clipboard</button>
+                    <button class="btn btn-action btn-sm" style="flex:1;" onclick="downloadBulkTxt()">💾 Download stock.txt</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Discord Webhook Settings Card inside Container -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let currentResellerKey = localStorage.getItem('vanta_reseller_key') || '';
+        let resellerData = null;
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.style.display = 'block';
+            setTimeout(() => { t.style.display = 'none'; }, 3500);
+        }
+
+        function copyText(str) {
+            navigator.clipboard.writeText(str);
+            showToast('Copied to clipboard: ' + str);
+        }
+
+        async function loginReseller() {
+            const key = document.getElementById('resellerKeyInput').value.trim();
+            if (!key) return alert('Please enter your reseller key');
+            currentResellerKey = key;
+            await loadResellerData();
+        }
+
+        function logoutReseller() {
+            localStorage.removeItem('vanta_reseller_key');
+            currentResellerKey = '';
+            document.getElementById('authSection').style.display = 'block';
+            document.getElementById('portalSection').style.display = 'none';
+            document.getElementById('topBarUser').style.display = 'none';
+        }
+
+        async function loadResellerData() {
+            if (!currentResellerKey) return;
+            try {
+                const res = await fetch('/api/reseller/info?key=' + encodeURIComponent(currentResellerKey));
+                const data = await res.json();
+                if (!data.success) {
+                    alert('Authentication failed: ' + (data.error || 'Invalid key'));
+                    logoutReseller();
+                    return;
+                }
+                localStorage.setItem('vanta_reseller_key', currentResellerKey);
+                resellerData = data.reseller;
+                renderDashboard();
+            } catch (err) {
+                alert('Connection error to Sovereign Hub: ' + err);
+            }
+        }
+
+        function renderDashboard() {
+            document.getElementById('authSection').style.display = 'none';
+            document.getElementById('portalSection').style.display = 'block';
+            document.getElementById('topBarUser').style.display = 'flex';
+
+            document.getElementById('resellerCredits').innerText = resellerData.credits;
+            document.getElementById('kpiCredits').innerText = resellerData.credits;
+            document.getElementById('kpiKeysCount').innerText = resellerData.keys ? resellerData.keys.length : 0;
+            
+            const activeCount = (resellerData.keys || []).filter(k => k.status === 'active').length;
+            document.getElementById('kpiActiveCount').innerText = activeCount;
+            document.getElementById('kpiStatus').innerText = resellerData.status.toUpperCase();
+
+            document.getElementById('apiTokenDisplay').value = currentResellerKey;
+            document.getElementById('apiCurlSnippet').innerText = 
+`curl -X POST http://51.159.121.126:8088/api/v1/reseller/mint_key \
+  -H "Authorization: Bearer ${currentResellerKey}" \
+  -H "Content-Type: application/json" \
+  -d '{"days": 30, "role": "user", "note": "Order #1042"}'`;
+
+            renderTable();
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('keysTableBody');
+            const q = (document.getElementById('keySearchInput').value || '').toLowerCase();
+            const keys = (resellerData.keys || []).filter(k => 
+                k.license_key.toLowerCase().includes(q) || (k.note && k.note.toLowerCase().includes(q))
+            );
+
+            if (keys.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:20px;">No issued keys found.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = keys.map(k => `
+                <tr>
+                    <td style="color:var(--accent); font-weight:700; cursor:pointer;" onclick="copyText('${k.license_key}')" title="Click to copy">
+                        ${k.license_key} 📋
+                    </td>
+                    <td><span class="badge ${k.role === 'vip' ? 'badge-vip' : 'badge-partner'}">${k.role.toUpperCase()}</span></td>
+                    <td style="color:#fff;">${k.note || '—'}</td>
+                    <td>${k.hwid ? `<span style="color:#aaa;">${k.hwid.substring(0,10)}...</span>` : '<span style="color:var(--success);">Unbound</span>'}</td>
+                    <td><span class="status-pill status-${k.status}"></span>${k.status.toUpperCase()}</td>
+                    <td>${new Date(k.expires_at * 1000).toLocaleDateString()}</td>
+                    <td>
+                        <button class="btn btn-action btn-sm" onclick="resetCustomerHWID('${k.license_key}')">Reset HWID</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function generateKey() {
+            const days = parseInt(document.getElementById('mintDays').value) || 30;
+            const role = document.getElementById('mintRole').value;
+            const note = document.getElementById('mintNote').value.trim() || 'Reseller Portal Mint';
+
+            if (resellerData.credits < 1) {
+                return alert('Insufficient credits. Contact Root Admin to top up your balance.');
+            }
+
+            const res = await fetch('/api/reseller/generate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ reseller_key: currentResellerKey, days, role, note })
+            });
+            const data = await res.json();
+            if (data.success) {
+                prompt('Customer License Key Generated! Copy below and send to buyer:', data.license_key);
+                loadResellerData();
+            } else {
+                alert('Generation failed: ' + data.error);
+            }
+        }
+
+        async function resetCustomerHWID(license_key) {
+            if (!confirm(`Reset Hardware ID binding for ${license_key}?`)) return;
+            const res = await fetch('/api/reseller/reset_hwid', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ reseller_key: currentResellerKey, license_key })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Customer HWID successfully unbound!');
+                loadResellerData();
+            } else {
+                alert('Reset failed: ' + data.error);
+            }
+        }
+
+        
+        function openBulkMintModal() {
+            document.getElementById('bulkModal').style.display = 'flex';
+            document.getElementById('bulkResultsBox').style.display = 'none';
+        }
+        function closeBulkMintModal() {
+            document.getElementById('bulkModal').style.display = 'none';
+        }
+        async function executeBulkMint() {
+            const count = parseInt(document.getElementById('bulkCount').value) || 10;
+            const days = parseInt(document.getElementById('bulkDays').value) || 30;
+            const note = document.getElementById('bulkNote').value.trim() || 'Bulk Stock Batch';
+
+            if (resellerData.credits < count) {
+                return alert(`Insufficient credits. You need ${count} credits to mint this batch.`);
+            }
+
+            const res = await fetch('/api/reseller/bulk_generate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ reseller_key: currentResellerKey, count, days, role: 'user', note })
+            });
+            const data = await res.json();
+            if (data.success) {
+                document.getElementById('bulkOutputArea').value = data.keys.join('\n');
+                document.getElementById('bulkResultsBox').style.display = 'block';
+                showToast(`Successfully minted ${data.count} keys!`);
+                loadResellerData();
+            } else {
+                alert('Bulk mint failed: ' + data.error);
+            }
+        }
+        function copyBulkStock() {
+            const txt = document.getElementById('bulkOutputArea').value;
+            navigator.clipboard.writeText(txt);
+            showToast('All stock keys copied to clipboard!');
+        }
+        function downloadBulkTxt() {
+            const txt = document.getElementById('bulkOutputArea').value;
+            const blob = new Blob([txt], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `vanta_keys_batch_${Date.now()}.txt`;
+            a.click();
+        }
+
+        if (currentResellerKey) {
+            loadResellerData();
+        }
+    </script>
+</body>
+</html>"""
+

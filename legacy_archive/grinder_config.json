@@ -1,0 +1,13 @@
+{
+  "queue_id": 830,
+  "champion_name": "Ashe",
+  "max_games": 0,
+  "web_dashboard_port": 8989,
+  "enable_dashboard": true,
+  "auto_honor": true,
+  "auto_harvest_loot": true,
+  "auto_reconnect": true,
+  "human_jitter_ms": 50,
+  "retreat_hp_percent": 28,
+  "surrender_at_15": false
+}

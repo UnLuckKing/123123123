@@ -1,0 +1,8 @@
+00:44:59.788 [bypass] PrepareLogin (Mac session) started
+00:45:00.689 [bypass] YAML loaded (3587 bytes)
+00:45:01.127 [bypass] slot acquired: 082fd56b-6302-4ef5-8043-31dc83f483ac
+00:45:11.020 [bypass] game_ready — args=39 proxy_port=8090 lcu_port=8100
+00:45:11.254 [match_monitor] Started monitoring for 3D Game Match (slot 082fd56b-6302-4ef5-8043-31dc83f483ac)
+00:45:58.993 [match_monitor] 3D Game Match detected! Args count: 20
+[VANTA] Launching Game: C:\Riot Games\League of Legends\Game\League of Legends.exe [51.159.121.126 8200 9C9tZ2cLXRmYD1aXlZqxSw== 242330608 -Product=LoL -PlayerID=242330608 -GameID=5651377119 -PlayerNameMode=ALIAS -LNPBlob=vPIJ18xIUkA= -GameBaseDir=C:\Riot Games\League of Legends -Region=NA -PlatformID=NA1 -Locale=tr_TR -SkipBuild -EnableCrashpad=true -RiotClientPort=54787 -RiotClientAuthToken=eX4QAZSGgQwV095oMjUf-A]
+00:45:59.573 [match_monitor] Local League of Legends.exe launched successfully!

@@ -1,0 +1,179 @@
+League of Legends.exe(0x000000000000574C): ALWAYS|   CFG| CrashHandler(Sentry)
+League of Legends.exe(0x000000000000574C): ALWAYS|  SNTR| Sentry process GUID: 2edbcaf4-771f-45d7-b110-a4d33cccfd8f
+League of Legends.exe(0x000000000000574C): ALWAYS|   CFG| Command Line:  "51.159.121.126 8200 9C9tZ2cLXRmYD1aXlZqxSw== 242330608" "-Product=LoL" "-PlayerID=242330608" "-GameID=5651377119" "-PlayerNameMode=ALIAS" "-LNPBlob=vPIJ18xIUkA=" "-GameBaseDir=C:\Riot Games\League of Legends" "-Region=NA" "-PlatformID=NA1" "-Locale=tr_TR" "-SkipBuild" "-EnableCrashpad=true" "-RiotClientPort=54787" "-RiotClientAuthToken=eX4QAZSGgQwV095oMjUf-A" 
+League of Legends.exe(0x000000000000574C): ALWAYS| Live Profiling enabled. Will overwrite old RPD.
+League of Legends.exe(0x000000000000574C): ALWAYS|   CFG| Build Version: Version 16.19.821.7343 (Sep 23 2026/15:56:18) [PUBLIC] <Releases/16.19> ChangeList: 8217343
+League of Legends.exe(0x000000000000574C): ALWAYS|   CFG| Content Version: 16.19.8217343+branch.releases-16-19.content.release
+League of Legends.exe(0x000000000000574C): ALWAYS| LCURemotingClient: Initializing on port 54787
+League of Legends.exe(0x000000000000574C): ALWAYS| LCURemotingClient: Connected to app process.
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Initializing Renderer
+League of Legends.exe(0x000000000000574C): ALWAYS| r3dRenderLayer::Init enter
+League of Legends.exe(0x000000000000574C): ALWAYS| r3dRenderLayer::Init() exit successfully
+League of Legends.exe(0x000000000000574C): ALWAYS| rr3dRenderLayer::InitDevice(XRes = 1920, YRes = 1080, BPP = 32) PresentMode: Borderless enter
+League of Legends.exe(0x000000000000574C): ALWAYS| rr3dRenderLayer::InitDevice: Creating X3D device
+League of Legends.exe(0x000000000000574C): ALWAYS| DXGI version: 1.6
+League of Legends.exe(0x000000000000574C): ALWAYS| Detected Adapter 'NVIDIA GeForce RTX 3060'
+League of Legends.exe(0x000000000000574C): ALWAYS| DXGI: Tearing support enabled.
+League of Legends.exe(0x000000000000574C): ALWAYS| DX11 feature level: 11.1
+League of Legends.exe(0x000000000000574C): ALWAYS| Using X3D Platform: DX11
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| r3dRenderLayer::RecreateOwnedResources
+League of Legends.exe(0x000000000000574C): ALWAYS| r3dRenderLayer::InitResources exit successfully
+League of Legends.exe(0x000000000000574C): ALWAYS|  STRT| GameClientApplicationSessionID: STRT
+League of Legends.exe(0x000000000000574C): ALWAYS| AudioManagerWwise: Wwise Version v2022.1.13 initialized.
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Pushing Patching State Stack Empty
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Pushing Bootstrap Current Topmost State: Bootstrap
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Pushing Patching Current Topmost State: Bootstrap
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Pushing Patching Current Topmost State: Patching
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Changing from Patching to LoLCommon Current Topmost State: Patching
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Changing from Patching to LoLCommon Current Topmost State: Patching
+League of Legends.exe(0x000000000000574C): ALWAYS| LCURemotingClient: Initializing on port 54787
+League of Legends.exe(0x000000000000574C): ALWAYS| LCURemotingClient: Connected to app process.
+League of Legends.exe(0x000000000000574C): ALWAYS| LCUVoiceChatClient: Disabling voice, channel not available at startup
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Changing from Patching to LoLCommon Current Topmost State: LoLCommon
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Pushing GameSession Current Topmost State: LoLCommon
+League of Legends.exe(0x000000000000574C):  ERROR| LCUVoiceChatClient: Failed initial voice-fonts status GET: Unknown function: GET /lol-team-voice/v1/voice-fonts/status
+League of Legends.exe(0x000000000000574C):  ERROR| LCUVoiceChatClient: Failed initial voice-font hardware-supported GET: Unknown function: GET /lol-team-voice/v1/voice-fonts/hardware-supported
+League of Legends.exe(0x000000000000574C):  ERROR| LCUVoiceChatClient: Failed initial voice-fonts GET: Unknown function: GET /lol-team-voice/v1/voice-fonts
+League of Legends.exe(0x000000000000574C): ALWAYS| LCUVoiceChatClient: Parental controls voice restriction updated: unrestricted
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Pushing GameSession Current Topmost State: LoLCommon
+League of Legends.exe(0x000000000000574C): ALWAYS| GameStartData::GameID=5651377119
+League of Legends.exe(0x000000000000574C): ALWAYS| Client Clock Synchronization Started
+League of Legends.exe(0x000000000000574C): ALWAYS|  CONN| Starting Multiplayer Session: PlayerClient GameID(5651377119) ServerAddress(51.159.121.126:8200) SummonerID(242330608)
+League of Legends.exe(0x000000000000574C): ALWAYS|  CONN| Connecting to address (51.159.121.126) port (8200)
+League of Legends.exe(0x00000000000023F4): ALWAYS| LCURemotingClient: Initializing on port 54787
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Pushing GameSession Current Topmost State: GameSession
+League of Legends.exe(0x00000000000023F4): ALWAYS| LCURemotingClient: Connected to app process.
+League of Legends.exe(0x000000000000574C): ALWAYS|  CONN| Hard Connect at LocalSimTime(0.000)
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0] Scale negative delay correction: 0.000036
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0]: Scale(1.00) LocalTime(0.000) SegmentStartTime(0.000) LocalOffset(4.300) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0] Pause negative delay correction: 0.000137
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0]: Command(Pause) LocalTime(0.000) SegmentStartTime(0.000) LocalOffset(4.299) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1] Scale negative delay correction: 0.000190
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1]: Scale(1.00) LocalTime(0.000) SegmentStartTime(12.116) LocalOffset(4.299) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1] Pause negative delay correction: 0.000224
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1]: Command(Unpause) LocalTime(12.116) SegmentStartTime(12.116) LocalOffset(4.299) Snap
+League of Legends.exe(0x00000000000023F4): ALWAYS| LCUChatClientAsync: Chat session is "loaded".
+League of Legends.exe(0x000000000000574C): ALWAYS|  CONN| Game Info Received: Initial Connection
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| GameSession Connecting to Segment GameSessionGameplay
+League of Legends.exe(0x000000000000574C): ALWAYS| GameStartInfo GPP match Id = 236e38a6-6c3c-394e-bfdb-dc515cf15cbd, mapskin = NPE_1
+League of Legends.exe(0x000000000000574C): ALWAYS|   CFG| MultiplayerSettings Encryption=true Compression=true MinimumSizeToCompressPayloadThreshold=0 CompressionLevel=3 Logging=false Wireless=false Redundancy=false Threshold=0 Resends=20 Timeout=8 TimeoutDisplay=3 MinLatency=0.000 
+League of Legends.exe(0x000000000000574C): ALWAYS|  CONN| Session Info: Received ServerSimTime(0.000) MyPreviousDisconnectCount(0)
+League of Legends.exe(0x000000000000574C): ALWAYS|  ROST| CONNECTION READY | TeamOrder 0) 'babapiro2632#2626' **LOCAL** - Champion(MissFortune) SkinID(0) TeamBuilderRole(NONE) PUUID(5b735c9e-0bc3-5762-8496-5283d8140a9d) ConnectionState(Connected)
+League of Legends.exe(0x000000000000574C): ALWAYS|  CONN| Game Server Connection Established after 0.544 seconds, 0 retries
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Pushing Gameplay Current Topmost State: GameSession
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Pushing Gameplay Current Topmost State: GameSession
+League of Legends.exe(0x000000000000574C): ALWAYS|   CFG| MultiplayerSettings Encryption=true Compression=true MinimumSizeToCompressPayloadThreshold=0 CompressionLevel=3 Logging=false Wireless=false Redundancy=false Threshold=0 Resends=20 Timeout=8 TimeoutDisplay=3 MinLatency=0.000 
+League of Legends.exe(0x000000000000574C): ALWAYS| Set focus to app
+League of Legends.exe(0x000000000000574C): ALWAYS|   CFG| OS Version: 10  Professional, 19045, CPU: AMD Ryzen 5 5500 (Family: 0x19 Model: 0x50 Stepping: 0x00) : 12 Logical Cores, Instruction Set Level 7, Physical memory: 17179869184, Display info: NVIDIA GeForce RTX 3060 4293918720 32.0.16.1692, Driver: 32.0.16.1692
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Pushing Gameplay Current Topmost State: Gameplay
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Pushing LoadingScreen Current Topmost State: Gameplay
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Pushing LoadingScreen Current Topmost State: Gameplay
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Pushing LoadingScreen Current Topmost State: LoadingScreen
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Loading Started
+League of Legends.exe(0x00000000000023F4): ALWAYS| LCUChatClientAsync: Parental controls chat restriction updated: unrestricted
+League of Legends.exe(0x00000000000023F4): ALWAYS| Successfully received v3 muted players list: 
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| LOADING: Begin Game Object Update
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| LOADING: End Game Object Update
+League of Legends.exe(0x000000000000574C): ALWAYS| LoadGlobalEffects
+League of Legends.exe(0x000000000000574C): ALWAYS| LoadGlobalEffects Finished
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-1A4F7C20
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-3B8E0D91
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-5C2A6F38
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-7D9B14EE
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-2E60A8C7
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-9F31B5D0
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-4A7C2E89
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-6B0D93F1
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-8C5E1A4B
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-7A6C39E2
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-1D2F86A3
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-3E9A0C57
+League of Legends.exe(0x000000000000574C): ALWAYS|  LOAD| SEJ-5F4B27D8
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Loading Ended
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Data Load Complete
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Start Main Loop
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0]: Scale(1.00) LocalTime(0.000) SegmentStartTime(0.000) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0]: Command(Pause) LocalTime(0.038) SegmentStartTime(0.000) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1]: Scale(1.00) LocalTime(14.820) SegmentStartTime(14.822) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1]: Command(Unpause) LocalTime(14.860) SegmentStartTime(14.822) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0]: Scale(1.00) LocalTime(0.038) SegmentStartTime(0.000) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0]: Command(Pause) LocalTime(0.038) SegmentStartTime(0.000) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1]: Scale(1.00) LocalTime(14.860) SegmentStartTime(14.822) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[1]: Command(Unpause) LocalTime(14.860) SegmentStartTime(14.822) LocalOffset(4.340) Snap
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| GameSession Connecting to Segment GameSessionGameplay
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Switching Game State from GAMESTATE_PREGAME to GAMESTATE_SPAWN for reason Received StartSpawn packet.
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Spawning completed
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| SEJ-BC89AC41
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| SEJ-6671BCAD
+League of Legends.exe(0x000000000000574C): ALWAYS|   CLK| Replica[0]: Command(Unpause) LocalTime(0.038) SegmentStartTime(0.000) LocalOffset(4.342) Interpolate
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Switching Game State from GAMESTATE_SPAWN to GAMESTATE_GAMELOOP for reason Received Game Start Packet.
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Popping LoadingScreen Current Topmost State: LoadingScreen
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| SEJ-8711AB1A 0.0377458
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| SEJ-9651ACAB
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| SEJ-B2890C00
+League of Legends.exe(0x000000000000574C): ALWAYS| GAMESTATE_GAMELOOP UpdateVis
+League of Legends.exe(0x000000000000574C): ALWAYS| GAMESTATE_GAMELOOP AudioUpdate
+League of Legends.exe(0x000000000000574C): ALWAYS| GAMESTATE_GAMELOOP EndRender & EndFrame
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| SEJ-891ACC45
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Popping LoadingScreen Current Topmost State: LoadingScreen
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Popping LoadingScreen Current Topmost State: Gameplay
+League of Legends.exe(0x000000000000244C): ALWAYS| Client Clock: InitialSync->Converging after 4.133 seconds. Offset(4.415152) Outliers(0) Delay(0.223322) DelayVariance(0.003578)
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000244C): ALWAYS| Client Clock: Converging->Synchronized after 120.099 seconds. Offset(4.392234) Outliers(1) Delay(0.172684) DelayVariance(0.000563)
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Lost
+League of Legends.exe(0x000000000000574C): ALWAYS| X3D: Focus Gained
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Switching Game State from GAMESTATE_GAMELOOP to GAMESTATE_ENDGAME for reason Received Game End Packet.
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| ALE-8SDFH23F
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Switching Game State from GAMESTATE_ENDGAME to GAMESTATE_PRE_EXIT for reason Game ended normally.
+League of Legends.exe(0x000000000000574C): ALWAYS|  CONN| Requesting disconnect (19)
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Switching Game State from GAMESTATE_PRE_EXIT to GAMESTATE_EXIT for reason PreExit Game State is Complete.
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Finished Main Loop
+League of Legends.exe(0x000000000000574C): ALWAYS| =================== Perf Stats (all in ms) =========================
+League of Legends.exe(0x000000000000574C): ALWAYS| Average Frame Time:    6.70
+League of Legends.exe(0x000000000000574C): ALWAYS| Average FPS:           149.32 fps
+League of Legends.exe(0x000000000000574C): ALWAYS| StdDev Frame Time:     3.46
+League of Legends.exe(0x000000000000574C): ALWAYS| Max Frame Time:        64.57
+League of Legends.exe(0x000000000000574C): ALWAYS| Ave GPU Frame Time:    2.68
+League of Legends.exe(0x000000000000574C): ALWAYS| StdDev GPU Frame Time: 2.95
+League of Legends.exe(0x000000000000574C): ALWAYS| Max GPU Frame Time:    34.36
+League of Legends.exe(0x000000000000574C): ALWAYS| GPU Time Histogram:    [1,17129,10019,2672,4414,4476,441,5,0,0,0,0,0,0]
+League of Legends.exe(0x000000000000574C): ALWAYS| Histogram Buckets:     [0.0,1.0,2.0,5.0,7.5,10.0,18.0,35.0,50.0,75.0,100.0,500.0,1000.0,340282346638528859811704183484516925440.0]
+League of Legends.exe(0x000000000000574C): ALWAYS| Frame Time Histogram:  [0,0,0,19851,7666,6172,5406,51,7,4,0,0,0,0]
+League of Legends.exe(0x000000000000574C): ALWAYS| Max Gfx Mem Allocated = 0.000 MiB
+League of Legends.exe(0x000000000000574C): ALWAYS| Max Memory = 693.117 / 1133.883 MiB (Active/Used)
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| LCU Game End Status: GAMEFLOW_EVENT.GAME_COMPLETED Result: 200: SUCCESS
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Popping Gameplay Current Topmost State: Gameplay
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Popping Gameplay Current Topmost State: Gameplay
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Popping Gameplay Current Topmost State: GameSession
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Exiting Application
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Popping GameSession Current Topmost State: GameSession
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Popping GameSession Current Topmost State: GameSession
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| ALE-8SDFH23F
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Popping LoLCommon Current Topmost State: LoLCommon
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Popping GameSession Current Topmost State: LoLCommon
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Popping LoLCommon Current Topmost State: LoLCommon
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Requesting State Transition: Popping Bootstrap Current Topmost State: Bootstrap
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Completed  State Transition: Popping LoLCommon Current Topmost State: Bootstrap
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Starting   State Transition: Popping Bootstrap Current Topmost State: Bootstrap
+League of Legends.exe(0x000000000000574C): ALWAYS| AudioManagerWwise::Finit
+League of Legends.exe(0x000000000000574C): ALWAYS|  FLOW| Destroying the renderer
+League of Legends.exe(0x000000000000574C): ALWAYS| r3dRenderLayer::Close() enter
+League of Legends.exe(0x000000000000574C): ALWAYS| r3dRenderLayer::Close() exit

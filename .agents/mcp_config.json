@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "vanta_engine": {
+      "command": "node",
+      "args": [
+        "c:\\Users\\hesap\\.antigravity-ide\\extensions\\lerax.antigravity-bypass-5.0.0\\resources\\mcp\\vanta_mcp_server.js"
+      ]
+    }
+  }
+}

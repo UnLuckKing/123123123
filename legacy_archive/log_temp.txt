@@ -1,0 +1,1 @@
+[2026-09-29 14:22:21] [server] VANTA orchestrator V5 listening on 0.0.0.0:9000
