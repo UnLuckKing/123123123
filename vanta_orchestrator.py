@@ -5,6 +5,7 @@
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -13,15 +14,21 @@ import signal
 import socket
 import sqlite3
 import ssl
+import struct
 import subprocess
 import sys
 import threading
 import time
+import queue
+import shutil
+from pathlib import Path
 import urllib.request
 import urllib.error
 import uuid
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from entitlement import EntitlementError, entitlement_verifier
 
 # ── Global Configuration ───────────────────────────────────────────────────────
 ORCH_PORT       = 9000
@@ -33,49 +40,416 @@ TEMPLATE_CONFIG = "/Users/m1/Library/Application Support/RiotClientData_slot1/Co
 DB_PATH         = "/Users/m1/vanta_auth.db"
 TELEMETRY_LOG   = "/Users/m1/slots_telemetry.log"
 DIRECT_UDP_ROUTE = True  # True = Direct 15-25ms UDP routing, False = Relayed 100ms M1 proxy
+PUBLIC_HOST = os.environ.get("VANTA_PUBLIC_HOST", os.environ.get("M1_HOST", ""))
+RELAY_BIND_HOST = os.environ.get("VANTA_RELAY_BIND", "127.0.0.1")
+ENTITLEMENT_ISSUER = os.environ.get("VANTA_AUTH_ISSUER", "vanta-auth")
+ENTITLEMENT_AUDIENCE = os.environ.get("VANTA_ENTITLEMENT_AUDIENCE", "vanta-orchestrator")
+IDEMPOTENCY_SLOTS = {}
+IDEMPOTENCY_LOCK = threading.RLock()
+
+ALLOWED_ORIGINS = {
+    origin.strip() for origin in os.environ.get("VANTA_ALLOWED_ORIGINS", "").split(",") if origin.strip()
+}
+MAX_REQUEST_BODY = int(os.environ.get("VANTA_MAX_REQUEST_BODY", str(2 * 1024 * 1024)))
+MAX_DIAGNOSTICS_LIMIT = int(os.environ.get("VANTA_MAX_DIAGNOSTICS_LIMIT", "200"))
+TELEMETRY_QUEUE_SIZE = int(os.environ.get("VANTA_TELEMETRY_QUEUE_SIZE", "4096"))
+TELEMETRY_BATCH_SIZE = int(os.environ.get("VANTA_TELEMETRY_BATCH_SIZE", "64"))
+TELEMETRY_RETENTION_DAYS = int(os.environ.get("VANTA_TELEMETRY_RETENTION_DAYS", "30"))
+TELEMETRY_MAX_LOG_BYTES = int(os.environ.get("VANTA_TELEMETRY_MAX_LOG_BYTES", str(50 * 1024 * 1024)))
+TELEMETRY_MAX_LOG_FILES = int(os.environ.get("VANTA_TELEMETRY_MAX_LOG_FILES", "4"))
+
+
+_SENSITIVE_PATTERNS = [
+    (re.compile(r"(?i)(license[_ -]?key\s*[:=]\s*)([^\s,;|]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(hwid\s*[:=]\s*)([^\s,;|]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(token\s*[:=]\s*)([^\s,;|]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(password\s*[:=]\s*)([^\s,;|]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(secret\s*[:=]\s*)([^\s,;|]+)"), r"\1[REDACTED]"),
+    (re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "[REDACTED_JWT]"),
+    (re.compile(r"X-Amz-Signature=[A-Za-z0-9%_-]+"), "X-Amz-Signature=[REDACTED]"),
+]
+
+
+def redact_text(value):
+    if not isinstance(value, str):
+        return value
+    for pattern, replacement in _SENSITIVE_PATTERNS:
+        value = pattern.sub(replacement, value)
+    return value
+
+
+def redact_value(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if str(key).lower() in {"license_key", "hwid", "token", "password", "secret", "yaml_data"}:
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = redact_value(item)
+        return redacted
+    if isinstance(value, (list, tuple)):
+        return [redact_value(item) for item in value]
+    return redact_text(value)
+
+
+class TelemetryPipeline:
+    """Bounded, priority-aware telemetry writer for SQLite and rotating logs."""
+
+    _STOP = object()
+
+    def __init__(self, db_path, log_path, queue_size=TELEMETRY_QUEUE_SIZE,
+                 batch_size=TELEMETRY_BATCH_SIZE, max_log_bytes=TELEMETRY_MAX_LOG_BYTES,
+                 max_log_files=TELEMETRY_MAX_LOG_FILES, retention_days=TELEMETRY_RETENTION_DAYS):
+        self.db_path = db_path
+        self.log_path = log_path
+        self.queue = queue.Queue(maxsize=max(1, queue_size))
+        self.batch_size = max(1, batch_size)
+        self.max_log_bytes = max(1, max_log_bytes)
+        self.max_log_files = max(1, max_log_files)
+        self.retention_days = max(0, retention_days)
+        self.dropped_debug = 0
+        self.dropped_total = 0
+        self._stats_lock = threading.Lock()
+        self._closed = False
+        self._done = threading.Event()
+        self._idle = threading.Event()
+        self._idle.set()
+        self._thread = threading.Thread(target=self._writer_loop, name="vanta-telemetry-writer", daemon=True)
+        self._thread.start()
+
+    @staticmethod
+    def _is_priority(severity):
+        return str(severity).upper() in {"WARN", "ERROR", "CRITICAL", "SECURITY"}
+
+    def _enqueue(self, item, priority):
+        self._idle.clear()
+        try:
+            self.queue.put_nowait(item)
+            return True
+        except queue.Full:
+            if not priority:
+                with self._stats_lock:
+                    self.dropped_debug += 1
+                    self.dropped_total += 1
+                return False
+
+        # Preserve lifecycle/security events by evicting one lower-priority item.
+        retained = []
+        evicted = False
+        while True:
+            try:
+                existing = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            if not evicted and not existing["priority"]:
+                evicted = True
+                with self._stats_lock:
+                    self.dropped_debug += 1
+                    self.dropped_total += 1
+                continue
+            retained.append(existing)
+        for existing in retained:
+            try:
+                self.queue.put_nowait(existing)
+            except queue.Full:
+                with self._stats_lock:
+                    self.dropped_total += 1
+        try:
+            self.queue.put_nowait(item)
+            return True
+        except queue.Full:
+            with self._stats_lock:
+                self.dropped_total += 1
+            return False
+
+    def record(self, severity, message, details="", client_ip="", slot_num=0,
+               slot_id="", hwid="", extra=None):
+        payload_extra = redact_value(dict(extra) if extra else {})
+        item = {
+            "timestamp": int(time.time()),
+            "severity": redact_text(severity),
+            "message": redact_text(message),
+            "details": redact_text(details),
+            "client_ip": "[REDACTED]" if client_ip else "",
+            "hwid": "[REDACTED]" if hwid else "",
+            "slot_num": slot_num,
+            "slot_id": redact_text(slot_id),
+            "extra": payload_extra,
+            "priority": self._is_priority(severity),
+            "persist_db": True,
+        }
+        return self._enqueue(item, item["priority"])
+
+    def log_line(self, message, severity="INFO"):
+        item = {
+            "timestamp": int(time.time()),
+            "severity": severity,
+            "message": redact_text(message),
+            "details": "",
+            "client_ip": "",
+            "hwid": "",
+            "slot_num": 0,
+            "slot_id": "",
+            "extra": {},
+            "priority": self._is_priority(severity),
+            "persist_db": False,
+        }
+        return self._enqueue(item, item["priority"])
+
+    def _configure_db(self, conn):
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "diagnostics" in tables:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_diagnostics_source_id ON diagnostics(source, id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_diagnostics_timestamp ON diagnostics(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_diagnostics_severity_timestamp ON diagnostics(severity, timestamp)")
+        if "audit_logs" in tables:
+            conn.execute("""CREATE INDEX IF NOT EXISTS idx_audit_logs_slot_timestamp
+                           ON audit_logs(slot_id, timestamp)""")
+        if self.retention_days:
+            cutoff = int(time.time()) - (self.retention_days * 86400)
+            if "diagnostics" in tables:
+                conn.execute("DELETE FROM diagnostics WHERE timestamp < ?", (cutoff,))
+        conn.commit()
+
+    def _rotate_log_if_needed(self, line_size):
+        try:
+            current_size = os.path.getsize(self.log_path)
+        except OSError:
+            current_size = 0
+        if current_size == 0 or current_size + line_size <= self.max_log_bytes:
+            return
+        for index in range(self.max_log_files - 1, 0, -1):
+            source = f"{self.log_path}.{index}"
+            target = f"{self.log_path}.{index + 1}"
+            if os.path.exists(source):
+                if index + 1 >= self.max_log_files:
+                    try:
+                        os.remove(source)
+                    except OSError:
+                        pass
+                else:
+                    os.replace(source, target)
+        if os.path.exists(self.log_path):
+            os.replace(self.log_path, f"{self.log_path}.1")
+
+    def _write_log(self, item):
+        line = "[%s] [%s] %s" % (
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(item["timestamp"])),
+            item["severity"],
+            item["message"],
+        )
+        if item["details"]:
+            line += " | " + item["details"]
+        line += "\n"
+        encoded = line.encode("utf-8")
+        self._rotate_log_if_needed(len(encoded))
+        Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log_path, "ab") as handle:
+            handle.write(encoded)
+
+    def _write_batch(self, conn, batch):
+        db_rows = [item for item in batch if item["persist_db"]]
+        if db_rows and conn is not None:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "diagnostics" in tables:
+                conn.executemany(
+                    """INSERT INTO diagnostics
+                    (timestamp, severity, source, message, details, client_ip, hwid, extra, resolved)
+                    VALUES (?, ?, 'ORCHESTRATOR', ?, ?, ?, ?, ?, 0)""",
+                    [(
+                        item["timestamp"], item["severity"], item["message"], item["details"],
+                        item["client_ip"], item["hwid"], json.dumps({
+                            **item["extra"], "slot_num": item["slot_num"], "slot_id": item["slot_id"]
+                        }),
+                    ) for item in db_rows],
+                )
+                conn.commit()
+        for item in batch:
+            self._write_log(item)
+
+    def _writer_loop(self):
+        conn = None
+        try:
+            if os.path.exists(self.db_path):
+                conn = sqlite3.connect(self.db_path, timeout=5)
+                self._configure_db(conn)
+            while True:
+                first = self.queue.get()
+                if first is self._STOP:
+                    break
+                batch = [first]
+                deadline = time.monotonic() + 0.25
+                while len(batch) < self.batch_size and time.monotonic() < deadline:
+                    try:
+                        item = self.queue.get(timeout=max(0.001, deadline - time.monotonic()))
+                    except queue.Empty:
+                        break
+                    if item is self._STOP:
+                        self._write_batch(conn, batch)
+                        self._done.set()
+                        return
+                    batch.append(item)
+                self._write_batch(conn, batch)
+                if self.queue.empty():
+                    self._idle.set()
+        except Exception:
+            with self._stats_lock:
+                self.dropped_total += self.queue.qsize()
+        finally:
+            if conn is not None:
+                conn.close()
+            self._idle.set()
+            self._done.set()
+
+    def flush(self, timeout=5):
+        ready = self._idle.wait(timeout)
+        if ready and not os.path.exists(self.log_path):
+            Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.log_path).touch()
+        return ready
+
+    def close(self, timeout=5):
+        if self._closed:
+            return
+        self._closed = True
+        deadline = time.monotonic() + timeout
+        while not self.queue.empty() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        try:
+            self.queue.put_nowait(self._STOP)
+        except queue.Full:
+            self.queue.get_nowait()
+            self.queue.put_nowait(self._STOP)
+        self._done.wait(max(0, deadline - time.monotonic()))
+
+
+_telemetry_pipeline = None
+_telemetry_pipeline_lock = threading.Lock()
+
+
+def get_telemetry_pipeline():
+    global _telemetry_pipeline
+    with _telemetry_pipeline_lock:
+        if _telemetry_pipeline is None:
+            _telemetry_pipeline = TelemetryPipeline(DB_PATH, TELEMETRY_LOG)
+        return _telemetry_pipeline
+
+
+@dataclass(frozen=True)
+class ProcessSnapshot:
+    pid: int
+    ppid: int
+    executable: str
+    command_line: str
+    start_time: float
+    rss_kb: int = 0
+
+
+@dataclass(frozen=True)
+class ProcessIdentity:
+    pid: int
+    executable: str
+    start_time: float
+
+
+class ProcessRegistry:
+    """One immutable process snapshot shared by all slot workers."""
+
+    def __init__(self, refresh_interval=0.5):
+        self.refresh_interval = max(0.0, refresh_interval)
+        self.provider = self._scan_processes
+        self._lock = threading.Lock()
+        self._snapshot = tuple()
+        self._refreshed_at = 0.0
+
+    @staticmethod
+    def _scan_processes():
+        try:
+            output = subprocess.check_output(
+                ["ps", "-axo", "pid=,ppid=,rss=,command="], timeout=5
+            ).decode(errors="replace")
+        except Exception:
+            return []
+        result = []
+        for line in output.splitlines():
+            parts = line.strip().split(None, 3)
+            if len(parts) != 4:
+                continue
+            try:
+                pid, ppid, rss_kb = int(parts[0]), int(parts[1]), int(parts[2])
+            except ValueError:
+                continue
+            command_line = parts[3]
+            result.append(ProcessSnapshot(pid, ppid, command_line.split(None, 1)[0], command_line, 0.0, rss_kb))
+        return result
+
+    def snapshot(self, force=False):
+        now = time.monotonic()
+        with self._lock:
+            if not force and self._snapshot and now - self._refreshed_at < self.refresh_interval:
+                return self._snapshot
+            self._snapshot = tuple(self.provider())
+            self._refreshed_at = now
+            return self._snapshot
+
+    def match(self, predicate):
+        return next((process for process in self.snapshot() if predicate(process)), None)
+
+    def identity_is_current(self, identity):
+        current = next((process for process in self.snapshot() if process.pid == identity.pid), None)
+        if current is None:
+            return False
+        if current.executable != identity.executable:
+            return False
+        return identity.start_time <= 0 or current.start_time == identity.start_time
+
+
+process_registry = ProcessRegistry()
+
+
+def wait_with_backoff(predicate, cancel_event, deadline, initial_delay=0.1, max_delay=2.0):
+    delay = initial_delay
+    while time.monotonic() < deadline:
+        if cancel_event.is_set():
+            return False
+        if predicate():
+            return True
+        if cancel_event.wait(min(delay, max(0.0, deadline - time.monotonic()))):
+            return False
+        delay = min(max_delay, delay * 2)
+    return False
 
 def log(msg: str):
-    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {redact_text(msg)}"
     print(line)
     sys.stdout.flush()
-    try:
-        with open(TELEMETRY_LOG, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+    get_telemetry_pipeline().log_line(msg)
 
 def record_telemetry(severity: str, message: str, details: str = "", client_ip: str = "", slot_num: int = 0, slot_id: str = "", hwid: str = "", extra: dict = None):
-    log(f"[{severity}][slot:{slot_num:02d}][{client_ip or 'local'}] {message} | {details}")
-    
-    def _db_async():
-        try:
-            if os.path.exists(DB_PATH):
-                payload_extra = dict(extra) if extra else {}
-                payload_extra["slot_num"] = slot_num
-                payload_extra["slot_id"] = slot_id
-                
-                conn = sqlite3.connect(DB_PATH, timeout=5)
-                c = conn.cursor()
-                c.execute("""
-                    INSERT INTO diagnostics (timestamp, severity, source, message, details, client_ip, hwid, extra, resolved)
-                    VALUES (?, ?, 'ORCHESTRATOR', ?, ?, ?, ?, ?, 0)
-                """, (int(time.time()), severity, message, details, client_ip, hwid, json.dumps(payload_extra)))
-                conn.commit()
-                conn.close()
-        except Exception:
-            pass
-
-    threading.Thread(target=_db_async, daemon=True).start()
+    decorated = f"[{severity}][slot:{slot_num:02d}][{client_ip or 'local'}] {message} | {details}"
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {redact_text(decorated)}")
+    sys.stdout.flush()
+    return get_telemetry_pipeline().record(severity, message, details, client_ip, slot_num, slot_id, hwid, extra)
 
 slots: dict = {}
-slots_lock = threading.Lock()
+slots_lock = threading.RLock()
 active_slot_nums: set = set()
+slot_reservations: dict = {}
 concluded_engine_pids: set = set()
 
 class SlotState:
     def __init__(self, slot_id: str, slot_num: int):
         self.slot_id        = slot_id
         self.slot_num       = slot_num
+        self.slot_generation = uuid.uuid4().hex
+        self.match_generation = 0
+        self.cancel_event    = threading.Event()
+        self.teardown_complete = threading.Event()
+        self.lifecycle_state = "ALLOCATED"
+        self._teardown_started = False
         self.data_dir       = os.path.join(BASE_SLOTS_DIR, f"slot{slot_num}")
         self.app_path       = f"/Applications/League of Legends_slot{slot_num}.app"
         # Non-overlapping port offsets for 25 concurrent slots:
@@ -83,7 +457,7 @@ class SlotState:
         # lcu_port:       8150..8174 (Slots 1..25)
         # udp_proxy_port: 8200..8224 (Slots 1..25)
         self.proxy_port     = 8090 + (slot_num - 1)
-        self.lcu_port       = 8150 + (slot_num - 1)
+        self.lcu_port       = 8096 if slot_num == 1 else (8150 + (slot_num - 1))
         self.udp_proxy_port = 8200 + (slot_num - 1)
         self.status         = "provisioning"
         self.args           = []
@@ -97,6 +471,10 @@ class SlotState:
         self.engine_pid     = None
         self.client_ip      = None
         self.client_hash    = None
+        self.license_id     = None
+        self.session_id     = None
+        self.device_thumbprint = None
+        self.idempotency_key = None
         self.created_at     = time.time()
         self.last_poll      = time.time()
         self._proxy_srv     = None
@@ -106,15 +484,133 @@ class SlotState:
         self._udp_srv       = None
         self._udp_stop      = None
 
-def alloc_slot_num() -> int:
+    def begin_match(self):
+        self.match_generation += 1
+        self.lifecycle_state = "MATCH_ACTIVE"
+        return self.match_generation
+
+
+def slot_is_current(slot: SlotState, generation: str) -> bool:
+    with slots_lock:
+        return (slots.get(slot.slot_id) is slot and
+                slot.slot_generation == generation and
+                slot.lifecycle_state not in ("STOPPING", "FREED") and
+                not slot.cancel_event.is_set())
+
+
+def snapshot_slot(slot: SlotState) -> dict:
+    return {
+        "status": slot.status,
+        "args": list(slot.args),
+        "game_args": list(slot.game_args),
+        "proxy_port": slot.proxy_port,
+        "lcu_port": slot.lcu_port,
+        "udp_proxy_port": slot.udp_proxy_port,
+        "rc_port": slot.rc_port,
+        "slot_num": slot.slot_num,
+        "slot_generation": slot.slot_generation,
+        "match_generation": slot.match_generation,
+        "lifecycle_state": slot.lifecycle_state,
+        "direct_udp_route": DIRECT_UDP_ROUTE,
+        "routing_mode": "direct" if DIRECT_UDP_ROUTE else "proxy",
+        "slot_owner": slot.license_id,
+    }
+
+
+def runtime_metrics():
+    pipeline = get_telemetry_pipeline()
+    with pipeline._stats_lock:
+        dropped_debug = pipeline.dropped_debug
+        dropped_total = pipeline.dropped_total
+    return {
+        "thread_count": threading.active_count(),
+        "slot_count": len(slots),
+        "process_snapshot_age_seconds": round(max(0.0, time.monotonic() - process_registry._refreshed_at), 3) if process_registry._refreshed_at else None,
+        "process_snapshot_count": len(process_registry._snapshot),
+        "telemetry_queue_depth": pipeline.queue.qsize(),
+        "telemetry_dropped_debug": dropped_debug,
+        "telemetry_dropped_total": dropped_total,
+    }
+
+def alloc_slot_num(preferred=None) -> int:
+    if preferred is not None:
+        if preferred in active_slot_nums:
+            raise RuntimeError("Slot number is still reserved")
+        if preferred < 1 or preferred > MAX_SLOTS:
+            raise RuntimeError("Invalid slot number")
+        active_slot_nums.add(preferred)
+        slot_reservations[preferred] = None
+        return preferred
     for num in range(1, MAX_SLOTS + 1):
         if num not in active_slot_nums:
             active_slot_nums.add(num)
+            slot_reservations[num] = None
             return num
     raise RuntimeError("No free slot numbers available (All 25 slots occupied)")
 
 def free_slot_num(num: int):
     active_slot_nums.discard(num)
+    slot_reservations.pop(num, None)
+
+def get_slot_by_num(num: int):
+    with slots_lock:
+        for s in slots.values():
+            if getattr(s, "slot_num", None) == num:
+                return s
+    return None
+
+
+def complete_slot_teardown(slot: SlotState):
+    with slots_lock:
+        if slot.lifecycle_state == "FREED":
+            return
+        owner = slot_reservations.get(slot.slot_num)
+        if owner not in (None, slot.slot_generation):
+            slot.teardown_complete.set()
+            return
+        slot.lifecycle_state = "FREED"
+        free_slot_num(slot.slot_num)
+        slot.teardown_complete.set()
+
+
+def request_slot_teardown(slot_id: str, generation: str, reason: str) -> bool:
+    with slots_lock:
+        slot = slots.get(slot_id)
+        if not slot or slot.slot_generation != generation or slot._teardown_started:
+            return False
+        slot._teardown_started = True
+        slot.lifecycle_state = "STOPPING"
+        slot.cancel_event.set()
+        slot_reservations[slot.slot_num] = slot.slot_generation
+        slots.pop(slot_id, None)
+
+    def teardown():
+        try:
+            record_telemetry("INFO", "SLOT_TEARDOWN", f"Closing slot {slot.slot_num} ({slot_id[:8]}): {reason}", slot.client_ip, slot.slot_num, slot_id)
+            for stop_flag, server in ((slot._proxy_stop, slot._proxy_srv), (slot._lcu_stop, slot._lcu_srv), (slot._udp_stop, slot._udp_srv)):
+                if stop_flag:
+                    stop_flag[0] = False
+                if server:
+                    try: server.close()
+                    except Exception: pass
+            clean_slot_processes_isolated(slot)
+            for lockfile in (os.path.join(slot.data_dir, "Config", "lockfile"), os.path.join(slot.app_path, "Contents", "LoL", "lockfile")):
+                try:
+                    if os.path.exists(lockfile): os.remove(lockfile)
+                except Exception: pass
+        finally:
+            complete_slot_teardown(slot)
+            record_telemetry("INFO", "SLOT_FREED", f"Slot {slot.slot_num} returned to free pool", slot.client_ip, slot.slot_num, slot_id)
+    threading.Thread(target=teardown, daemon=True).start()
+    return True
+
+
+def conclude_match(slot_id: str, match_generation: int) -> bool:
+    with slots_lock:
+        slot = slots.get(slot_id)
+        if not slot or slot.match_generation != match_generation:
+            return False
+        return True
 
 def read_lockfile(path: str):
     try:
@@ -127,15 +623,93 @@ def read_lockfile(path: str):
         pass
     return None, None
 
+class RelayHandle:
+    def __init__(self, server, stop_flag, port, sockets, threads):
+        self.server = server
+        self.stop_flag = stop_flag
+        self.port = port
+        self.sockets = sockets
+        self.threads = threads
+        self.closed = False
+        self._lock = threading.Lock()
+
+    @property
+    def active_connections(self):
+        with self._lock:
+            return len(self.sockets)
+
+    def __iter__(self):
+        # Compatibility with existing ``server, stop_flag = start_*_proxy`` callers.
+        yield self.server
+        yield self.stop_flag
+
+    def register_socket(self, sock):
+        with self._lock:
+            if self.closed:
+                return False
+            self.sockets.add(sock)
+            return True
+
+    def unregister_socket(self, sock):
+        with self._lock:
+            self.sockets.discard(sock)
+
+    def close(self, timeout=2):
+        with self._lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.stop_flag[0] = False
+            sockets = list(self.sockets)
+        try:
+            self.server.close()
+        except Exception:
+            pass
+        for sock in sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                sock.close()
+            except Exception:
+                pass
+        deadline = time.monotonic() + max(0, timeout)
+        for thread in list(self.threads):
+            if thread is threading.current_thread() or not thread.is_alive():
+                continue
+            thread.join(max(0, deadline - time.monotonic()))
+
+
 def start_tcp_proxy(listen_port: int, target_port):
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    srv.bind(("0.0.0.0", listen_port))
+    srv.bind((RELAY_BIND_HOST, listen_port))
     srv.listen(128)
-    log(f"[proxy] TCP 0.0.0.0:{listen_port} -> dynamic target {target_port}")
+    actual_port = srv.getsockname()[1]
+    log(f"[proxy] TCP/WS {RELAY_BIND_HOST}:{actual_port} -> dynamic target {target_port}")
 
     is_running = [True]
+    sockets = {srv}
+    threads = set()
+    handle = RelayHandle(srv, is_running, actual_port, sockets, threads)
+
+    # Optional secondary listener: dual-bind 8096 and 8150 for LCU compatibility
+    sec_srv = None
+    secondary_port = 8150 if listen_port == 8096 else (8096 if listen_port == 8150 else None)
+    if secondary_port:
+        try:
+            s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s2.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            s2.bind((RELAY_BIND_HOST, secondary_port))
+            s2.listen(128)
+            handle.register_socket(s2)
+            sec_srv = s2
+            log(f"[proxy] Dual-bound secondary port {RELAY_BIND_HOST}:{secondary_port}")
+        except Exception:
+            sec_srv = None
 
     def get_target_port():
         if callable(target_port):
@@ -143,7 +717,9 @@ def start_tcp_proxy(listen_port: int, target_port):
             except Exception: return None
         return target_port
 
-    def relay(src, dst):
+    def relay_raw(src, dst):
+        handle.register_socket(src)
+        handle.register_socket(dst)
         try:
             while is_running[0]:
                 d = src.recv(65536)
@@ -152,57 +728,257 @@ def start_tcp_proxy(listen_port: int, target_port):
         except Exception:
             pass
         finally:
+            handle.unregister_socket(src)
+            handle.unregister_socket(dst)
             try: src.close()
             except: pass
             try: dst.close()
             except: pass
 
-    def accept_loop():
-        while is_running[0]:
-            try:
-                c, _ = srv.accept()
-            except (OSError, socket.error):
-                # Clean exit on socket close
-                break
-            except Exception:
-                break
+    def relay_ws(client_sock, target_sock):
+        handle.register_socket(client_sock)
+        handle.register_socket(target_sock)
+        stop = [False]
 
-            port = get_target_port()
-            if not port:
-                try: c.close()
-                except: pass
-                continue
-
+        def target_to_ws():
             try:
-                c.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                while is_running[0] and not stop[0]:
+                    data = target_sock.recv(32768)
+                    if not data:
+                        break
+                    length = len(data)
+                    if length < 126:
+                        header = struct.pack("!BB", 0x82, length)
+                    elif length <= 0xFFFF:
+                        header = struct.pack("!BBH", 0x82, 126, length)
+                    else:
+                        header = struct.pack("!BBQ", 0x82, 127, length)
+                    client_sock.sendall(header + data)
             except Exception:
                 pass
+            finally:
+                stop[0] = True
+                try: client_sock.close()
+                except: pass
+                try: target_sock.close()
+                except: pass
 
+        def ws_to_target():
             try:
-                t = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                t.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                t.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                t.connect(("127.0.0.1", port))
+                buf = bytearray()
+                while is_running[0] and not stop[0]:
+                    chunk = client_sock.recv(32768)
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+
+                    while len(buf) >= 2:
+                        b1 = buf[0]
+                        b2 = buf[1]
+                        opcode = b1 & 0x0F
+                        masked = (b2 & 0x80) != 0
+                        payload_len = b2 & 0x7F
+
+                        offset = 2
+                        if payload_len == 126:
+                            if len(buf) < 4: break
+                            payload_len = struct.unpack("!H", buf[2:4])[0]
+                            offset = 4
+                        elif payload_len == 127:
+                            if len(buf) < 10: break
+                            payload_len = struct.unpack("!Q", buf[2:10])[0]
+                            offset = 10
+
+                        mask_key = None
+                        if masked:
+                            if len(buf) < offset + 4: break
+                            mask_key = buf[offset:offset+4]
+                            offset += 4
+
+                        if len(buf) < offset + payload_len:
+                            break
+
+                        payload = buf[offset:offset+payload_len]
+                        del buf[:offset+payload_len]
+
+                        if opcode == 0x8:
+                            stop[0] = True
+                            return
+                        elif opcode == 0x9:
+                            pong = struct.pack("!BB", 0x8A, 0)
+                            client_sock.sendall(pong)
+                            continue
+                        elif opcode in (0x1, 0x2):
+                            if masked and mask_key:
+                                unmasked = bytearray(len(payload))
+                                for i in range(len(payload)):
+                                    unmasked[i] = payload[i] ^ mask_key[i % 4]
+                                target_sock.sendall(unmasked)
+                            else:
+                                target_sock.sendall(payload)
+            except Exception:
+                pass
+            finally:
+                stop[0] = True
+                try: client_sock.close()
+                except: pass
+                try: target_sock.close()
+                except: pass
+
+        t1 = threading.Thread(target=target_to_ws, daemon=True)
+        t2 = threading.Thread(target=ws_to_target, daemon=True)
+        threads.update((t1, t2))
+        t1.start()
+        t2.start()
+
+    def handle_client(c):
+        try:
+            if handle.closed:
+                c.close()
+                return
+            c.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
+
+        peek = b""
+        try:
+            peek = c.recv(4, socket.MSG_PEEK)
+        except Exception:
+            pass
+
+        if peek.startswith(b"GET ") or peek.startswith(b"POST"):
+            try:
+                req_data = b""
+                while b"\r\n\r\n" not in req_data and len(req_data) < 8192:
+                    chunk = c.recv(4096)
+                    if not chunk:
+                        break
+                    req_data += chunk
+
+                headers = {}
+                lines = req_data.split(b"\r\n")
+                for line in lines[1:]:
+                    if b":" in line:
+                        k, v = line.split(b":", 1)
+                        headers[k.strip().lower().decode("utf-8", errors="ignore")] = v.strip().decode("utf-8", errors="ignore")
+
+                ws_key = headers.get("sec-websocket-key")
+                if ws_key and "upgrade" in headers.get("connection", "").lower() and headers.get("upgrade", "").lower() == "websocket":
+                    first_line = lines[0].decode("utf-8", errors="ignore") if lines else ""
+                    req_slot_num = None
+                    if "slot=" in first_line:
+                        try:
+                            part = first_line.split("slot=")[1].split("&")[0].split(" ")[0]
+                            req_slot_num = int(part)
+                        except Exception:
+                            pass
+
+                    port = None
+                    for _ in range(25):
+                        if req_slot_num is not None:
+                            s = get_slot_by_num(req_slot_num)
+                            if s:
+                                host_hdr = headers.get("host", "").lower()
+                                if listen_port in (8096, 8150) or (8150 <= listen_port <= 8174) or "tl" in host_hdr:
+                                    port = s.app_port
+                                else:
+                                    port = s.rc_port
+                        if not port:
+                            port = get_target_port()
+                        if port:
+                            break
+                        time.sleep(0.2)
+
+                    if not port:
+                        c.sendall(b"HTTP/1.1 503 Service Unavailable\r\n\r\nBackend Port Not Ready")
+                        c.close()
+                        return
+
+                    try:
+                        t = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        t.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        t.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                        t.connect(("127.0.0.1", port))
+                    except Exception:
+                        c.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\nTarget Connect Failed")
+                        c.close()
+                        return
+
+                    magic = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+                    accept = base64.b64encode(hashlib.sha1(ws_key.encode() + magic).digest()).decode()
+                    resp = (
+                        "HTTP/1.1 101 Switching Protocols\r\n"
+                        "Upgrade: websocket\r\n"
+                        "Connection: Upgrade\r\n"
+                        f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
+                    )
+                    c.sendall(resp.encode())
+                    relay_ws(c, t)
+                    return
+                else:
+                    c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\nVANTA_RELAY_ALIVE")
+                    c.close()
+                    return
             except Exception:
                 try: c.close()
                 except: pass
-                continue
+                return
 
-            threading.Thread(target=relay, args=(c, t), daemon=True).start()
-            threading.Thread(target=relay, args=(t, c), daemon=True).start()
+        port = get_target_port()
+        if not port:
+            try: c.close()
+            except: pass
+            return
 
-    threading.Thread(target=accept_loop, daemon=True).start()
-    return srv, is_running
+        try:
+            t = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            t.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            t.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            t.connect(("127.0.0.1", port))
+        except Exception:
+            try: c.close()
+            except: pass
+            return
+
+        left = threading.Thread(target=relay_raw, args=(c, t), daemon=True)
+        right = threading.Thread(target=relay_raw, args=(t, c), daemon=True)
+        threads.update((left, right))
+        left.start()
+        right.start()
+
+    def accept_loop(listener):
+        while is_running[0]:
+            try:
+                c, _ = listener.accept()
+            except (OSError, socket.error):
+                break
+            except Exception:
+                break
+            threading.Thread(target=handle_client, args=(c,), daemon=True).start()
+
+    accept_thread = threading.Thread(target=accept_loop, args=(srv,), daemon=True)
+    threads.add(accept_thread)
+    accept_thread.start()
+
+    if sec_srv:
+        sec_thread = threading.Thread(target=accept_loop, args=(sec_srv,), daemon=True)
+        threads.add(sec_thread)
+        sec_thread.start()
+
+    return handle
 
 def start_udp_proxy(listen_port: int, target_ip: str, target_port: int):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", listen_port))
-    log(f"[udp_proxy] UDP 0.0.0.0:{listen_port} <-> {target_ip}:{target_port}")
+    sock.bind((RELAY_BIND_HOST, listen_port))
+    actual_port = sock.getsockname()[1]
+    log(f"[udp_proxy] UDP {RELAY_BIND_HOST}:{actual_port} <-> {target_ip}:{target_port}")
 
     client_addr = [None]
     is_running = [True]
+    threads = set()
+    handle = RelayHandle(sock, is_running, actual_port, {sock}, threads)
 
     def loop():
         while is_running[0]:
@@ -219,11 +995,15 @@ def start_udp_proxy(listen_port: int, target_ip: str, target_port: int):
             except Exception:
                 break
 
-    threading.Thread(target=loop, daemon=True).start()
-    return sock, is_running
+    loop_thread = threading.Thread(target=loop, daemon=True)
+    threads.add(loop_thread)
+    loop_thread.start()
+    return handle
 
-def kill_pid_safe(pid: int, sig=signal.SIGKILL):
+def kill_pid_safe(pid: int, sig=None):
     if not pid: return
+    if sig is None:
+        sig = getattr(signal, "SIGKILL", signal.SIGTERM)
     try:
         os.kill(pid, sig)
     except ProcessLookupError:
@@ -232,6 +1012,12 @@ def kill_pid_safe(pid: int, sig=signal.SIGKILL):
         log(f"[cleanup] Error killing PID {pid}: {err}")
 
 def clean_slot_processes_isolated(slot: SlotState):
+    # Riot session YAML is a credential, not slot state; remove it on teardown.
+    private_yaml = os.path.join(slot.data_dir, "Data", "RiotGamesPrivateSettings.yaml")
+    try:
+        if os.path.exists(private_yaml): os.remove(private_yaml)
+    except OSError:
+        pass
     if slot.engine_pid:
         kill_pid_safe(slot.engine_pid)
         slot.engine_pid = None
@@ -277,15 +1063,16 @@ def clean_slot_processes_isolated(slot: SlotState):
         except: pass
 
 def capture_game_engine_loop(slot: SlotState):
+    generation = slot.slot_generation
     record_telemetry("INFO", "GAME_MONITOR_STARTED", "3D engine monitor active", slot.client_ip, slot.slot_num, slot.slot_id)
     for _ in range(7200):
         with slots_lock:
-            if slot.slot_id not in slots:
+            if not slot_is_current(slot, generation):
                 break
         try:
-            ps_out = subprocess.check_output(["ps", "-axo", "pid,ppid,command"], timeout=5).decode(errors="replace")
-            for line in ps_out.splitlines():
-                lower_line = line.lower()
+            for process in process_registry.snapshot():
+                line = f"{process.pid} {process.ppid} {process.command_line}"
+                lower_line = process.command_line.lower()
                 if "leagueoflegends" in lower_line and ("-gameid=" in lower_line or "-product=lol" in lower_line or "192.207." in lower_line or "104.160." in lower_line):
                     parts = line.strip().split()
                     if len(parts) < 3:
@@ -297,10 +1084,12 @@ def capture_game_engine_loop(slot: SlotState):
                         continue
 
                     # If slot has recorded lc_pid, ensure this game engine was spawned by this slot's LeagueClient
-                    if slot.lc_pid and ppid != slot.lc_pid and f"_slot{slot.slot_num}.app" not in line:
+                    if slot.lc_pid and ppid != slot.lc_pid and f"_slot{slot.slot_num}.app" not in process.command_line:
                         continue
 
                     with slots_lock:
+                        if not slot_is_current(slot, generation):
+                            return
                         other_claimed = any(s.engine_pid == pid for sid, s in slots.items() if sid != slot.slot_id)
                         if pid in concluded_engine_pids or other_claimed or slot.engine_pid == pid:
                             continue
@@ -318,15 +1107,23 @@ def capture_game_engine_loop(slot: SlotState):
                     target_ip = game_args[0]
                     target_port = int(game_args[1])
 
-                    slot._udp_srv, slot._udp_stop = start_udp_proxy(slot.udp_proxy_port, target_ip, target_port)
+                    udp_handle = start_udp_proxy(slot.udp_proxy_port, target_ip, target_port)
+                    slot._udp_srv = udp_handle
+                    slot._udp_stop = udp_handle.stop_flag
 
                     if not DIRECT_UDP_ROUTE:
-                        game_args[0] = "51.159.121.126"
+                        if not PUBLIC_HOST:
+                            log("[game_monitor] VANTA_PUBLIC_HOST / M1_HOST missing; cannot rewrite UDP relay target")
+                            continue
+                        game_args[0] = PUBLIC_HOST
                         game_args[1] = str(slot.udp_proxy_port)
 
                     with slots_lock:
+                        if not slot_is_current(slot, generation):
+                            return
                         slot.game_args = game_args
                         slot.engine_pid = pid
+                        slot.begin_match()
 
                     mode_str = "DIRECT (15-25ms)" if DIRECT_UDP_ROUTE else f"UDP PROXY {slot.udp_proxy_port} (100ms)"
                     record_telemetry("INFO", "3D_GAME_ENGINE_CAPTURED", f"Target: {target_ip}:{target_port} -> Mode: {mode_str}", slot.client_ip, slot.slot_num, slot.slot_id, extra={"engine_pid": pid, "target_ip": target_ip, "target_port": target_port, "udp_proxy_port": slot.udp_proxy_port, "direct_udp": DIRECT_UDP_ROUTE})
@@ -339,23 +1136,38 @@ def capture_game_engine_loop(slot: SlotState):
                     while True:
                         time.sleep(1.0)
                         with slots_lock:
-                            if slot.slot_id not in slots:
+                            if not slot_is_current(slot, generation):
                                 return
-                            if slot.engine_pid is None and len(slot.game_args) == 0:
-                                concluded_engine_pids.add(pid)
-                                record_telemetry("INFO", "MATCH_CONCLUDED_MONITOR_RESET", "3D Game Engine reset cleanly", slot.client_ip, slot.slot_num, slot.slot_id)
-                                break
+                        if slot.engine_pid is None and len(slot.game_args) == 0:
+                            concluded_engine_pids.add(pid)
+                            if len(concluded_engine_pids) > 512:
+                                concluded_engine_pids.pop()
+                            record_telemetry("INFO", "MATCH_CONCLUDED_MONITOR_RESET", "3D Game Engine reset cleanly", slot.client_ip, slot.slot_num, slot.slot_id)
+                            log(f"[game_monitor:slot{slot.slot_num}] Match concluded cleanly for PID {pid}. Ready for next match.")
+                            break
                         try:
                             os.kill(pid, 0)
                         except OSError:
-                            pass
+                            with slots_lock:
+                                if slot.engine_pid == pid:
+                                    slot.engine_pid = None
+                                    slot.game_args = []
+                            concluded_engine_pids.add(pid)
+                            if len(concluded_engine_pids) > 512:
+                                concluded_engine_pids.pop()
+                            record_telemetry("INFO", "MATCH_CONCLUDED_MONITOR_RESET", "3D Game Engine terminated on Mac", slot.client_ip, slot.slot_num, slot.slot_id)
+                            log(f"[game_monitor:slot{slot.slot_num}] 3D Game Engine PID {pid} exited on Mac. Ready for next match.")
+                            break
         except Exception as e:
             log(f"[game_monitor:slot{slot.slot_num}] error: {e}")
         time.sleep(1.0)
 
 def vm_worker(slot: SlotState, yaml_data: str):
     t_start = time.time()
+    generation = slot.slot_generation
     try:
+        if not slot_is_current(slot, generation):
+            return
         record_telemetry("INFO", "SLOT_PROVISION_START", "Initializing isolated slot environment", slot.client_ip, slot.slot_num, slot.slot_id)
         clean_slot_processes_isolated(slot)
 
@@ -408,6 +1220,7 @@ should_repair: false
         private_yaml = os.path.join(data_dir, "RiotGamesPrivateSettings.yaml")
         with open(private_yaml, "w") as f:
             f.write(yaml_data)
+        os.chmod(private_yaml, 0o600)
 
         cmd = [
             RC_APP_PATH,
@@ -422,8 +1235,12 @@ should_repair: false
         env = os.environ.copy()
         env["VANTA_SLOT_NUM"] = str(slot.slot_num)
         proc = subprocess.Popen(cmd, env=env)
-        slot.rc_proc = proc
-        slot.rc_pid = proc.pid
+        with slots_lock:
+            if not slot_is_current(slot, generation):
+                proc.kill()
+                return
+            slot.rc_proc = proc
+            slot.rc_pid = proc.pid
         record_telemetry("INFO", "RC_SPAWNED", f"PID {proc.pid} spawned with user-data-root {slot.data_dir}", slot.client_ip, slot.slot_num, slot.slot_id, extra={"rc_pid": proc.pid})
 
         rc_port, rc_token = None, None
@@ -436,11 +1253,14 @@ should_repair: false
             _fail(slot, f"RC lockfile timeout in {slot.data_dir}")
             return
 
-        slot.rc_port  = rc_port
-        slot.rc_token = rc_token
-        srv, stop_flag = start_tcp_proxy(slot.proxy_port, lambda: slot.rc_port)
-        slot._proxy_srv = srv
-        slot._proxy_stop = stop_flag
+        with slots_lock:
+            if not slot_is_current(slot, generation):
+                return
+            slot.rc_port  = rc_port
+            slot.rc_token = rc_token
+        proxy_handle = start_tcp_proxy(slot.proxy_port, lambda: slot.rc_port)
+        slot._proxy_srv = proxy_handle
+        slot._proxy_stop = proxy_handle.stop_flag
         record_telemetry("INFO", "RC_ONLINE", f"RCS listening on port {rc_port}, proxy on {slot.proxy_port}", slot.client_ip, slot.slot_num, slot.slot_id, extra={"rc_port": rc_port, "proxy_port": slot.proxy_port})
 
         ctx = ssl.create_default_context()
@@ -465,6 +1285,10 @@ should_repair: false
             except Exception:
                 pass
             time.sleep(1)
+
+        if not session_ready:
+            _fail(slot, "Riot session authentication timeout")
+            return
 
         # Proactively accept EULA for this account & product to prevent HTTP 464
         for eula_path in ["/eula/v1/agreement/acceptance", "/eula/v1/product-context"]:
@@ -519,9 +1343,11 @@ should_repair: false
 
         # Poll for LeagueClientUx arguments
         for _ in range(90):
+            if not slot_is_current(slot, generation):
+                return
             try:
-                ps = subprocess.check_output(["ps", "-axo", "pid,args"], timeout=5).decode(errors="replace")
-                for line in ps.splitlines():
+                for process in process_registry.snapshot():
+                    line = f"{process.pid} {process.command_line}"
                     if ("grep" not in line
                             and ("LeagueClientUx" in line or "LeagueClient" in line)
                             and "--app-port=" in line
@@ -537,13 +1363,18 @@ should_repair: false
                                 try: app_port = int(a.split("=")[1])
                                 except: pass
                                 break
-                        if app_port:
-                            slot.app_port = app_port
-                            slot.lc_pid = pid
-                            slot._lcu_srv, slot._lcu_stop = start_tcp_proxy(slot.lcu_port, lambda: slot.app_port)
                         with slots_lock:
+                            if not slot_is_current(slot, generation):
+                                return
+                            if app_port:
+                                slot.app_port = app_port
+                                slot.lc_pid = pid
+                                lcu_handle = start_tcp_proxy(slot.lcu_port, lambda: slot.app_port)
+                                slot._lcu_srv = lcu_handle
+                                slot._lcu_stop = lcu_handle.stop_flag
                             slot.status = "game_ready"
-                            slot.args   = args
+                            slot.lifecycle_state = "READY"
+                            slot.args   = list(args)
                         
                         elapsed = time.time() - t_start
                         record_telemetry("INFO", "SLOT_READY", f"LCU online (PID {pid}, AppPort {app_port}) in {elapsed:.1f}s", slot.client_ip, slot.slot_num, slot.slot_id, extra={"lc_pid": pid, "app_port": app_port, "elapsed_s": round(elapsed, 2), "proxy_port": slot.proxy_port, "lcu_port": slot.lcu_port})
@@ -559,57 +1390,23 @@ should_repair: false
 
 def _fail(slot: SlotState, reason: str):
     with slots_lock:
+        if not slot_is_current(slot, slot.slot_generation):
+            return
         slot.status = f"FAILED: {reason}"
     record_telemetry("ERROR", "SLOT_FAILED", reason, slot.client_ip, slot.slot_num, slot.slot_id)
-    _cleanup_slot_locked(slot.slot_id)
+    request_slot_teardown(slot.slot_id, slot.slot_generation, reason)
 
 def _cleanup_slot_locked(sid: str):
-    if sid not in slots: return
-    s = slots.pop(sid, None)
-    if not s: return
-
-    def _async_teardown(slot_obj: SlotState):
-        record_telemetry("INFO", "SLOT_TEARDOWN", f"Closing slot {slot_obj.slot_num} ({sid[:8]})", slot_obj.client_ip, slot_obj.slot_num, sid)
-        if slot_obj._proxy_stop:
-            slot_obj._proxy_stop[0] = False
-        if slot_obj._proxy_srv:
-            try: slot_obj._proxy_srv.close()
-            except: pass
-
-        if slot_obj._lcu_stop:
-            slot_obj._lcu_stop[0] = False
-        if slot_obj._lcu_srv:
-            try: slot_obj._lcu_srv.close()
-            except: pass
-
-        if slot_obj._udp_stop:
-            slot_obj._udp_stop[0] = False
-        if slot_obj._udp_srv:
-            try: slot_obj._udp_srv.close()
-            except: pass
-
-        clean_slot_processes_isolated(slot_obj)
-
-        lockfile = os.path.join(slot_obj.data_dir, "Config", "lockfile")
-        if os.path.exists(lockfile):
-            try: os.remove(lockfile)
-            except: pass
-
-        app_lock = os.path.join(slot_obj.app_path, "Contents", "LoL", "lockfile")
-        if os.path.exists(app_lock):
-            try: os.remove(app_lock)
-            except: pass
-
-        free_slot_num(slot_obj.slot_num)
-        record_telemetry("INFO", "SLOT_FREED", f"Slot {slot_obj.slot_num} returned to free pool (Active: {len(slots)}/{MAX_SLOTS})", slot_obj.client_ip, slot_obj.slot_num, sid)
-
-    threading.Thread(target=_async_teardown, args=(s,), daemon=True).start()
+    slot = slots.get(sid)
+    if slot:
+        request_slot_teardown(sid, slot.slot_generation, "cleanup")
 
 def slot_reaper_loop():
     while True:
         time.sleep(5)
         now = time.time()
         to_clean = []
+        telemetry_events = []
         with slots_lock:
             for sid, s in list(slots.items()):
                 # 1. Active 3D Game Match: NEVER evict while match is active!
@@ -638,72 +1435,95 @@ def slot_reaper_loop():
             for sid, reason in to_clean:
                 stale_slot = slots.get(sid)
                 snum = getattr(stale_slot, "slot_num", 0)
-                record_telemetry("WARN", "REAPER_EVICTION", reason, getattr(stale_slot, "client_ip", ""), snum, sid)
+                telemetry_events.append((reason, getattr(stale_slot, "client_ip", ""), snum, sid))
                 _cleanup_slot_locked(sid)
-
-def verify_license_db(key: str, hwid: str, client_ip: str) -> tuple[bool, str]:
-    """Verify license key and HWID directly against vanta_auth.db"""
-    if not key:
-        return False, "Missing license key"
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        c.execute("SELECT * FROM licenses WHERE license_key = ?", (key,))
-        row = c.fetchone()
-        if not row:
-            conn.close()
-            return False, "Invalid license key"
-        if row["status"] != "active":
-            conn.close()
-            return False, f"License is {row['status']}"
-        now = int(time.time())
-        if row["expires_at"] < now:
-            c.execute("UPDATE licenses SET status = 'expired' WHERE id = ?", (row["id"],))
-            conn.commit()
-            conn.close()
-            return False, "License has expired"
-        bound_hwid = row["hwid"]
-        if bound_hwid and hwid and bound_hwid != hwid:
-            conn.close()
-            return False, "HWID mismatch"
-        if not bound_hwid and hwid:
-            c.execute("UPDATE licenses SET hwid = ?, last_ip = ?, last_seen = ? WHERE id = ?", (hwid, client_ip, now, row["id"]))
-            conn.commit()
-        else:
-            c.execute("UPDATE licenses SET last_ip = ?, last_seen = ? WHERE id = ?", (client_ip, now, row["id"]))
-            conn.commit()
-        conn.close()
-        return True, "Authorized"
-    except Exception as e:
-        return False, f"Auth DB error: {e}"
+        for reason, client_ip, slot_num, sid in telemetry_events:
+            record_telemetry("WARN", "REAPER_EVICTION", reason, client_ip, slot_num, sid)
 
 # ── HTTP Server Request Handler ────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-    def do_POST(self):
-        if self.path == "/api/request_slot":
-            client_ip = self.client_address[0]
-            license_key = self.headers.get("X-Vanta-License", "").strip() or "VANTA_ACTIVE"
-            hwid = self.headers.get("X-Vanta-HWID", "").strip() or "LOCAL_HWID"
+    def _entitlement(self, scope, slot=None, payload=None):
+        try:
+            claims = entitlement_verifier().verify(self.headers.get("Authorization", ""), scope)
+        except EntitlementError:
+            self._json(401, {"error": "invalid_entitlement"})
+            return None
+        if slot is not None:
+            generation = self.headers.get("X-Vanta-Slot-Generation") or (payload or {}).get("slot_generation")
+            if (slot.license_id != claims.get("sub") or slot.session_id != claims.get("sid") or
+                    slot.device_thumbprint != claims.get("device_key_thumbprint") or
+                    generation != slot.slot_generation):
+                self._json(403, {"error": "slot_owner_mismatch"})
+                return None
+        return claims
 
-            length = int(self.headers.get("Content-Length", 0))
+    def _admin(self):
+        expected = os.environ.get("VANTA_ORCHESTRATOR_ADMIN_TOKEN", "")
+        supplied = self.headers.get("X-Vanta-Admin-Token", "")
+        if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+            self._json(403 if expected else 503, {"error": "private_admin_required"})
+            return False
+        return True
+
+    def do_POST(self):
+        try:
+            self._do_POST()
+        except Exception as err:
+            log(f"[http] POST {self.path} failed: {type(err).__name__}: {err}")
+            try:
+                self._json(500, {"error": "internal_server_error", "message": "request processing failed"})
+            except Exception:
+                self.close_connection = True
+
+    def _do_POST(self):
+        if self.path == "/api/request_slot":
+            claims = self._entitlement("slot:create")
+            if claims is None:
+                return
+            client_ip = self.client_address[0]
+            # Optional diagnostic identity header; older clients do not send it.
+            # Never require it for slot allocation and redact it in telemetry.
+            hwid = self.headers.get("X-Vanta-HWID", "").strip()
+
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                self._json(400, {"error": "invalid_content_length"})
+                return
+            if length < 0 or length > MAX_REQUEST_BODY:
+                self._json(413, {"error": "request_too_large", "max_bytes": MAX_REQUEST_BODY})
+                return
             yaml_data = self.rfile.read(length).decode()
             client_hash = hashlib.sha256(yaml_data.encode()).hexdigest()[:16]
+            idem = self.headers.get("Idempotency-Key", "").strip()
+            if not idem or len(idem) > 128:
+                self._json(400, {"error": "idempotency_key_required"})
+                return
+            idem_key = (claims["sub"], claims["sid"], idem)
+            with IDEMPOTENCY_LOCK:
+                old = IDEMPOTENCY_SLOTS.get(idem_key)
+                if old:
+                    with slots_lock:
+                        existing = slots.get(old)
+                    if existing and existing.license_id == claims["sub"] and existing.session_id == claims["sid"]:
+                        self._json(200, {"slot_id": old, "proxy_port": existing.proxy_port, "lcu_port": existing.lcu_port, "udp_proxy_port": existing.udp_proxy_port, "slot_generation": existing.slot_generation, "idempotent": True})
+                        return
 
+            reclaim_events = []
             with slots_lock:
                 client_ip = self.client_address[0]
                 # Auto-clear ONLY if the same account credentials / session reconnects
                 for sid, s in list(slots.items()):
                     if getattr(s, "client_hash", None) == client_hash:
-                        record_telemetry("INFO", "RECONNECT_RECLAIM", f"Auto-clearing previous slot {s.slot_num} ({sid[:8]}) for reconnecting account", client_ip, s.slot_num, sid)
+                        reclaim_events.append(("INFO", "RECONNECT_RECLAIM", f"Auto-clearing previous slot {s.slot_num} ({sid[:8]})", s.slot_num, sid))
                         _cleanup_slot_locked(sid)
 
                 if len(slots) >= MAX_SLOTS:
                     oldest_id = min(slots.keys(), key=lambda sid: getattr(slots[sid], "last_poll", 0))
-                    record_telemetry("WARN", "POOL_FULL_EVICTION", f"Evicting oldest slot {oldest_id[:8]} to make room (Capacity: {MAX_SLOTS})", client_ip)
+                    reclaim_events.append(("WARN", "POOL_FULL_EVICTION", f"Evicting oldest slot {oldest_id[:8]} to make room (Capacity: {MAX_SLOTS})", 0, oldest_id))
                     _cleanup_slot_locked(oldest_id)
 
                 try:
@@ -716,40 +1536,48 @@ class Handler(BaseHTTPRequestHandler):
                 slot              = SlotState(slot_id, slot_num)
                 slot.client_ip    = self.client_address[0]
                 slot.client_hash  = client_hash
-                slot.license_key  = license_key
-                slot.hwid         = hwid
+                slot.license_id = claims["sub"]
+                slot.session_id = claims["sid"]
+                slot.device_thumbprint = claims["device_key_thumbprint"]
+                slot.idempotency_key = idem
                 slot.last_poll    = time.time()
                 slots[slot_id]    = slot
 
-            record_telemetry("INFO", "SLOT_ALLOCATED", f"Slot {slot_num} assigned to key {license_key[:8]}... RCS: {slot.proxy_port}, LCU: {slot.lcu_port}, UDP: {slot.udp_proxy_port}", slot.client_ip, slot_num, slot_id, hwid=hwid, extra={"proxy_port": slot.proxy_port, "lcu_port": slot.lcu_port, "udp_proxy_port": slot.udp_proxy_port})
+            for severity, event, details, event_slot_num, event_slot_id in reclaim_events:
+                record_telemetry(severity, event, details, client_ip, event_slot_num, event_slot_id)
+            record_telemetry("INFO", "SLOT_ALLOCATED", f"Slot {slot_num} assigned RCS: {slot.proxy_port}, LCU: {slot.lcu_port}, UDP: {slot.udp_proxy_port}", slot.client_ip, slot_num, slot_id, hwid=hwid, extra={"proxy_port": slot.proxy_port, "lcu_port": slot.lcu_port, "udp_proxy_port": slot.udp_proxy_port})
             threading.Thread(target=vm_worker, args=(slot, yaml_data), daemon=True).start()
+            with IDEMPOTENCY_LOCK:
+                IDEMPOTENCY_SLOTS[idem_key] = slot_id
             self._json(200, {
                 "slot_id":        slot_id,
                 "proxy_port":     slot.proxy_port,
                 "lcu_port":       slot.lcu_port,
                 "udp_proxy_port": slot.udp_proxy_port,
                 "max_slots":      MAX_SLOTS,
-                "active_count":   len(slots)
+                "active_count":   len(slots),
+                "slot_generation": slot.slot_generation
             })
         elif self.path in ("/api/slots/reset", "/api/slots/clear_all"):
+            if not self._admin(): return
             with slots_lock:
                 slot_ids = list(slots.keys())
                 for sid in slot_ids:
                     _cleanup_slot_locked(sid)
-            subprocess.run("pkill -9 -f 'LeagueClient' || true", shell=True)
-            subprocess.run("pkill -9 -f 'LeagueofLegends' || true", shell=True)
-            subprocess.run("pkill -9 -f 'RiotClientServices' || true", shell=True)
-            subprocess.run("pkill -9 -f 'Riot Client' || true", shell=True)
-            record_telemetry("WARN", "EMERGENCY_RESET", f"Cleared {len(slot_ids)} slots and killed all background Riot processes", self.client_address[0])
+            record_telemetry("WARN", "EMERGENCY_RESET", f"Cleared {len(slot_ids)} owned slots", self.client_address[0])
             self._json(200, {"success": True, "cleared_slots": len(slot_ids), "max_slots": MAX_SLOTS})
         elif self.path == "/api/slots/kill":
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length).decode() if length > 0 else "{}"
             try: payload = json.loads(raw)
             except Exception: payload = {}
+            claims = self._entitlement("slot:stop")
+            if claims is None:
+                return
             sid = payload.get("slot_id")
             with slots_lock:
-                if sid in slots:
+                slot = slots.get(sid)
+                if slot and slot.license_id == claims.get("sub") and slot.session_id == claims.get("sid") and self._entitlement("slot:stop", slot, payload):
                     snum = slots[sid].slot_num
                     _cleanup_slot_locked(sid)
                     record_telemetry("INFO", "MANUAL_KILL", f"Client requested kill: freed slot {snum} ({sid[:8]})", self.client_address[0], snum, sid)
@@ -761,14 +1589,30 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length).decode() if length > 0 else "{}"
             try: payload = json.loads(raw)
             except Exception: payload = {}
+            claims = self._entitlement("match:conclude")
+            if claims is None:
+                return
             sid = payload.get("slot_id")
+            requested_match_generation = payload.get("match_generation")
             with slots_lock:
                 slot = slots.get(sid)
             if not slot:
                 self._json(404, {"error": "slot_not_found"})
                 return
+            if slot.license_id != claims.get("sub") or slot.session_id != claims.get("sid") or self._entitlement("match:conclude", slot, payload) is None:
+                return
 
-            record_telemetry("INFO", "MATCH_CONCLUDED", f"Match concluded on Windows for slot {slot.slot_num} ({sid[:8]}). Concluding Mac 3D engine PID {slot.engine_pid}", slot.client_ip, slot.slot_num, sid, extra={"engine_pid": slot.engine_pid})
+            if requested_match_generation is not None:
+                try:
+                    requested_match_generation = int(requested_match_generation)
+                except (TypeError, ValueError):
+                    self._json(409, {"error": "invalid_match_generation"})
+                    return
+                if not conclude_match(sid, requested_match_generation):
+                    self._json(409, {"error": "stale_match_generation"})
+                    return
+
+            record_telemetry("INFO", "MATCH_CONCLUDED", f"Match concluded on Windows for slot {slot.slot_num} ({sid[:8]}). Concluding Mac 3D engine PID {slot.engine_pid}", slot.client_ip, slot.slot_num, sid, extra={"engine_pid": slot.engine_pid, "match_generation": slot.match_generation})
             if slot.engine_pid:
                 concluded_engine_pids.add(slot.engine_pid)
                 try:
@@ -781,15 +1625,16 @@ class Handler(BaseHTTPRequestHandler):
             with slots_lock:
                 slot.game_args = []
                 slot.engine_pid = None
-                if slot._udp_stop:
-                    slot._udp_stop[0] = False
+                slot.lifecycle_state = "READY"
                 if slot._udp_srv:
                     try: slot._udp_srv.close()
                     except: pass
                     slot._udp_srv = None
+                    slot._udp_stop = None
 
             self._json(200, {"success": True, "message": "match_concluded_processed", "slot_num": slot.slot_num})
         elif self.path == "/api/config/routing":
+            if not self._admin(): return
             global DIRECT_UDP_ROUTE
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length).decode() if length > 0 else "{}"
@@ -824,91 +1669,30 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/poll_slot":
+            claims = self._entitlement("slot:poll")
+            if claims is None:
+                return
             slot_id = params.get("slot_id", [None])[0]
             with slots_lock:
                 slot = slots.get(slot_id)
             if not slot:
                 self._json(404, {"error": "not_found"})
                 return
+            if slot.license_id != claims.get("sub") or slot.session_id != claims.get("sid") or self._entitlement("slot:poll", slot) is None:
+                return
 
             slot.last_poll = time.time()
-            self._json(200, {
-                "status":         slot.status,
-                "args":           slot.args,
-                "game_args":      slot.game_args,
-                "proxy_port":     slot.proxy_port,
-                "lcu_port":       slot.lcu_port,
-                "udp_proxy_port": slot.udp_proxy_port,
-                "rc_port":        slot.rc_port,
-                "slot_num":       slot.slot_num,
-                "direct_udp_route": DIRECT_UDP_ROUTE,
-                "routing_mode":   "direct" if DIRECT_UDP_ROUTE else "proxy"
-            })
+            self._json(200, snapshot_slot(slot))
         elif parsed.path == "/api/config/routing":
+            if not self._admin(): return
             self._json(200, {
                 "direct_udp_route": DIRECT_UDP_ROUTE,
                 "mode": "direct" if DIRECT_UDP_ROUTE else "proxy",
                 "latency": "15-25ms" if DIRECT_UDP_ROUTE else "100ms",
                 "description": "Direct 15-25ms UDP routing" if DIRECT_UDP_ROUTE else "Relayed 100ms M1 proxy routing"
             })
-        elif parsed.path == "/api/client/update_check":
-            client_ver = params.get("version", ["5.0.0"])[0].strip()
-            version_file = "/Users/m1/releases/version.json"
-            latest_info = {
-                "version": "6.5.0",
-                "mandatory": True,
-                "changelog": "VANTA Apex v6.5: Direct Ultra-Low Latency UDP Routing (15-25ms) + 25 Isolated Slots + Autonomous In-Place Self-Updater",
-                "download_url": "http://51.159.121.126:9000/api/client/download_latest",
-                "file_size": 0,
-                "sha256": ""
-            }
-            if os.path.exists(version_file):
-                try:
-                    with open(version_file, "r") as vf:
-                        latest_info.update(json.load(vf))
-                except Exception:
-                    pass
-            bin_path = "/Users/m1/releases/vanta.exe"
-            if os.path.exists(bin_path):
-                latest_info["file_size"] = os.path.getsize(bin_path)
-
-            is_diff = (client_ver != latest_info["version"])
-            self._json(200, {
-                "success": True,
-                "update_available": is_diff,
-                "current_version": client_ver,
-                "latest_version": latest_info["version"],
-                "mandatory": latest_info.get("mandatory", True),
-                "download_url": latest_info["download_url"],
-                "file_size": latest_info.get("file_size", 0),
-                "sha256": latest_info.get("sha256", ""),
-                "changelog": latest_info.get("changelog", "")
-            })
-        elif parsed.path == "/api/client/download_latest":
-            bin_path = "/Users/m1/releases/vanta.exe"
-            if not os.path.exists(bin_path):
-                self._json(404, {"success": False, "error": "Latest binary release not found"})
-                return
-
-            file_size = os.path.getsize(bin_path)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Disposition", 'attachment; filename="vanta.exe"')
-            self.send_header("Content-Length", str(file_size))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-
-            with open(bin_path, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    try:
-                        self.wfile.write(chunk)
-                    except Exception:
-                        break
-            return
         elif parsed.path == "/api/slots":
+            if not self._admin(): return
             res = {}
             with slots_lock:
                 now = time.time()
@@ -935,8 +1719,14 @@ class Handler(BaseHTTPRequestHandler):
                 "free_slots":   MAX_SLOTS - len(res)
             })
         elif parsed.path == "/api/diagnostics/recent":
+            if not self._admin(): return
             slot_filter = params.get("slot", [None])[0]
-            limit_val = int(params.get("limit", [50])[0])
+            try:
+                limit_val = int(params.get("limit", [50])[0])
+            except (TypeError, ValueError):
+                self._json(400, {"error": "invalid_limit"})
+                return
+            limit_val = max(1, min(MAX_DIAGNOSTICS_LIMIT, limit_val))
             events = []
             try:
                 if os.path.exists(DB_PATH):
@@ -978,7 +1768,8 @@ class Handler(BaseHTTPRequestHandler):
                 "ok":           True,
                 "active_slots": len(slots),
                 "max_slots":    MAX_SLOTS,
-                "free_slots":   MAX_SLOTS - len(slots)
+                "free_slots":   MAX_SLOTS - len(slots),
+                "metrics":      runtime_metrics(),
             })
         else:
             self.send_response(404); self.end_headers()
@@ -987,13 +1778,18 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if origin and origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
 if __name__ == "__main__":
-    server = ThreadingHTTPServer(("0.0.0.0", ORCH_PORT), Handler)
+    if not os.environ.get("VANTA_ENTITLEMENT_PUBLIC_KEYS"):
+        raise SystemExit("VANTA_ENTITLEMENT_PUBLIC_KEYS is required; refusing anonymous orchestrator mode")
+    server = ThreadingHTTPServer((os.environ.get("VANTA_ORCH_BIND", "127.0.0.1"), ORCH_PORT), Handler)
     threading.Thread(target=slot_reaper_loop, daemon=True).start()
     log(f"[server] VANTA 25-Slot Zero-Collision Orchestrator V6.3 listening on 0.0.0.0:{ORCH_PORT}")
     server.serve_forever()
