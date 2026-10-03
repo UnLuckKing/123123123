@@ -435,6 +435,7 @@ def record_telemetry(severity: str, message: str, details: str = "", client_ip: 
     return get_telemetry_pipeline().record(severity, message, details, client_ip, slot_num, slot_id, hwid, extra)
 
 slots: dict = {}
+failed_slots: dict = {}
 slots_lock = threading.RLock()
 active_slot_nums: set = set()
 slot_reservations: dict = {}
@@ -1325,7 +1326,7 @@ should_repair: false
             time.sleep(1)
 
         if not session_ready:
-            _fail(slot, "Riot session authentication timeout")
+            _fail(slot, "NO_ACTIVE_RIOT_ACCOUNT")
             return
 
         # Proactively accept EULA for this account & product to prevent HTTP 464
@@ -1432,6 +1433,13 @@ def _fail(slot: SlotState, reason: str):
         if not slot_is_current(slot, slot.slot_generation):
             return
         slot.status = f"FAILED: {reason}"
+        failed_slots[slot.slot_id] = {
+            "status": f"FAILED: {reason}",
+            "reason": reason,
+            "license_id": getattr(slot, "license_id", None),
+            "session_id": getattr(slot, "session_id", None),
+            "failed_at": time.time(),
+        }
     record_telemetry("ERROR", "SLOT_FAILED", reason, slot.client_ip, slot.slot_num, slot.slot_id)
     request_slot_teardown(slot.slot_id, slot.slot_generation, reason)
 
@@ -1447,6 +1455,9 @@ def slot_reaper_loop():
         to_clean = []
         telemetry_events = []
         with slots_lock:
+            for fid, finfo in list(failed_slots.items()):
+                if (now - finfo.get("failed_at", 0)) > 300.0:
+                    failed_slots.pop(fid, None)
             for sid, s in list(slots.items()):
                 # 1. Active 3D Game Match: NEVER evict while match is active!
                 if getattr(s, "engine_pid", None) is not None or getattr(s, "game_args", None):
@@ -1722,7 +1733,16 @@ class Handler(BaseHTTPRequestHandler):
             slot_id = params.get("slot_id", [None])[0]
             with slots_lock:
                 slot = slots.get(slot_id)
+                failed_info = failed_slots.get(slot_id)
             if not slot:
+                if failed_info and (not claims or failed_info.get("license_id") == claims.get("sub")):
+                    self._json(200, {
+                        "slot_id": slot_id,
+                        "status": failed_info.get("status", "FAILED: NO_ACTIVE_RIOT_ACCOUNT"),
+                        "reason": failed_info.get("reason", "NO_ACTIVE_RIOT_ACCOUNT"),
+                        "error": "ERR_NO_RIOT_ACCOUNT"
+                    })
+                    return
                 self._json(404, {"error": "not_found"})
                 return
             if slot.license_id != claims.get("sub") or slot.session_id != claims.get("sid") or self._entitlement("slot:poll", slot) is None:
@@ -1836,7 +1856,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if not os.environ.get("VANTA_ENTITLEMENT_PUBLIC_KEYS"):
         raise SystemExit("VANTA_ENTITLEMENT_PUBLIC_KEYS is required; refusing anonymous orchestrator mode")
-    server = ThreadingHTTPServer((os.environ.get("VANTA_ORCH_BIND", "127.0.0.1"), ORCH_PORT), Handler)
+    server = ThreadingHTTPServer((os.environ.get("VANTA_ORCH_BIND", "0.0.0.0"), ORCH_PORT), Handler)
     threading.Thread(target=slot_reaper_loop, daemon=True).start()
     log(f"[server] VANTA 25-Slot Zero-Collision Orchestrator V6.3 listening on 0.0.0.0:{ORCH_PORT}")
     server.serve_forever()

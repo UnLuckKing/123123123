@@ -40,3 +40,7 @@ func isLeagueGameRunning() bool {
 func killLeagueGame() {
 	exec.Command("pkill", "-x", decodeStr(lolGameNameObf)).Run()
 }
+
+func hideCmd(cmd *exec.Cmd) *exec.Cmd {
+	return cmd
+}

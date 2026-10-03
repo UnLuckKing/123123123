@@ -8,6 +8,8 @@ export function AutoAcceptQueue():Promise<string>;
 
 export function ClaimRewards():Promise<Array<string>>;
 
+export function ClearLastError():Promise<string>;
+
 export function ConcludeMatch():Promise<string>;
 
 export function DismissPostGame():Promise<string>;
@@ -24,13 +26,21 @@ export function GetChampSelectRule():Promise<main.ChampSelectRule>;
 
 export function GetConfigProfiles():Promise<Array<main.ConfigProfileInfo>>;
 
+export function GetLastError():Promise<string>;
+
 export function GetLicenseInfo():Promise<Record<string, any>>;
 
 export function GetLobbyScout():Promise<main.LobbyScoutReport>;
 
+export function GetLocale():Promise<string>;
+
+export function GetNoAccountI18n(arg1:string):Promise<main.NoAccountI18n>;
+
 export function GetPlatform():Promise<string>;
 
 export function GetStatus():Promise<string>;
+
+export function LaunchRiotClient():Promise<string>;
 
 export function Login(arg1:string,arg2:string):Promise<string>;
 

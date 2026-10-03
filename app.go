@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,6 +23,7 @@ type App struct {
 	ctx            context.Context
 	mu             sync.Mutex
 	status         string
+	lastError      string
 	rcsPath        string
 	proxy          *LeagueProxy
 	license        *LoginOKPayload
@@ -112,12 +114,51 @@ func (a *App) GetLicenseInfo() map[string]interface{} {
 	}
 }
 
+// GetLastError returns the current error code or message.
+func (a *App) GetLastError() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastError
+}
+
+// ClearLastError resets the active error state.
+func (a *App) ClearLastError() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastError = ""
+	return "ok"
+}
+
+// GetLocale returns the detected system or League language code.
+func (a *App) GetLocale() string {
+	return DetectSystemLocale()
+}
+
+// GetNoAccountI18n returns localized strings for no-account error screen.
+func (a *App) GetNoAccountI18n(locale string) NoAccountI18n {
+	return GetLocalizedNoAccount(locale)
+}
+
+// LaunchRiotClient opens RiotClientServices on Windows to let the user log in.
+func (a *App) LaunchRiotClient() string {
+	rcsPath := FindRiotClientServices()
+	if rcsPath == "" {
+		return "Riot Client executable not found on disk"
+	}
+	cmd := hideCmd(exec.Command(rcsPath))
+	if err := cmd.Start(); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
 // Login authorizes access. Instant zero-friction execution.
 func (a *App) Login(username, password string) string {
 	a.mu.Lock()
 	a.licenseKey = username
 	a.ticketData = ""
 	a.signature = ""
+	a.lastError = ""
 	a.license = &LoginOKPayload{
 		HasLicense: true,
 		ExpiresAt:  "Lifetime (Active)",
@@ -129,6 +170,9 @@ func (a *App) Login(username, password string) string {
 
 // Logout disconnects from the server.
 func (a *App) Logout() string {
+	a.mu.Lock()
+	a.lastError = ""
+	a.mu.Unlock()
 	a.cleanup()
 	return "ok"
 }
@@ -140,6 +184,7 @@ func (a *App) Logout() string {
 // with the Mac's RC session tunnel — bypassing Vanguard via macOS platform muafiyeti.
 func (a *App) PrepareLogin(rcsPath string) string {
 	a.mu.Lock()
+	a.lastError = ""
 	a.rcsPath = rcsPath
 	if a.status != "logged_in" {
 		a.mu.Unlock()
@@ -180,8 +225,11 @@ func (a *App) PrepareLogin(rcsPath string) string {
 	if err != nil || len(yamlData) < 100 || !hasValidSession {
 		a.mu.Lock()
 		a.status = "logged_in"
+		a.lastError = "ERR_NO_RIOT_ACCOUNT"
 		a.mu.Unlock()
-		return "No active Riot account found! Open Riot Client, login with 'Remember Me', close it, then try Start Bypass again."
+		loc := DetectSystemLocale()
+		item := GetLocalizedNoAccount(loc)
+		return item.Title + ": " + item.Message
 	}
 	a.logDebug("[bypass] YAML loaded (%d bytes)", len(yamlData))
 
@@ -211,6 +259,7 @@ func (a *App) PrepareLogin(rcsPath string) string {
 		if err != nil {
 			a.mu.Lock()
 			a.status = "logged_in"
+			a.lastError = "ERR_NO_RIOT_ACCOUNT"
 			a.mu.Unlock()
 			a.logDebug("[bypass] slot request failed: %v", err)
 			ReportGlobalTelemetry("ERROR", "CLIENT_BYPASS", "M1 Slot request failed", err.Error(), nil)
@@ -236,6 +285,7 @@ func (a *App) PrepareLogin(rcsPath string) string {
 			if time.Now().After(deadline) {
 				a.mu.Lock()
 				a.status = "logged_in"
+				a.lastError = "ERR_NO_RIOT_ACCOUNT"
 				a.mu.Unlock()
 				a.logDebug("[bypass] timeout waiting for Mac slot")
 				ReportGlobalTelemetry("ERROR", "CLIENT_BYPASS", "Timeout waiting for Mac slot", fmt.Sprintf("slot_id=%s", slotID), nil)
@@ -249,8 +299,9 @@ func (a *App) PrepareLogin(rcsPath string) string {
 					a.mu.Lock()
 					a.status = "logged_in"
 					a.activeSlotID = ""
+					a.lastError = "ERR_NO_RIOT_ACCOUNT"
 					a.mu.Unlock()
-					a.logDebug("[bypass] slot %s terminated or not found", slotID)
+					a.logDebug("[bypass] slot %s terminated on Mac -> no active account", slotID)
 					return
 				}
 				time.Sleep(2 * time.Second)
@@ -279,6 +330,7 @@ func (a *App) PrepareLogin(rcsPath string) string {
 				})
 				a.mu.Lock()
 				a.status = "running"
+				a.lastError = ""
 				a.mu.Unlock()
 				if err := LaunchLeagueClientLocally(statusResp.Args, proxyPort, lcuPort); err != nil {
 					a.logDebug("[bypass] launch error: %v", err)
@@ -293,13 +345,14 @@ func (a *App) PrepareLogin(rcsPath string) string {
 				return
 
 			default:
-				if strings.Contains(statusResp.Status, "FAILED") || strings.Contains(statusResp.Status, "timeout") || strings.Contains(statusResp.Status, "error") {
+				if strings.Contains(statusResp.Status, "FAILED") || strings.Contains(statusResp.Status, "timeout") || strings.Contains(statusResp.Status, "error") || strings.Contains(statusResp.Status, "NO_ACTIVE") {
 					a.mu.Lock()
 					a.status = "logged_in"
 					a.activeSlotID = ""
+					a.lastError = "ERR_NO_RIOT_ACCOUNT"
 					a.mu.Unlock()
-					a.logDebug("[bypass] slot failed: %s", statusResp.Status)
-					ReportGlobalTelemetry("ERROR", "CLIENT_BYPASS", fmt.Sprintf("Mac slot failed with status: %s", statusResp.Status), "", map[string]interface{}{"slot_id": slotID, "status": statusResp.Status})
+					a.logDebug("[bypass] slot failed: %s -> no active account", statusResp.Status)
+					ReportGlobalTelemetry("ERROR", "CLIENT_BYPASS", "Riot session authentication timeout (no account)", "", map[string]interface{}{"slot_id": slotID, "status": statusResp.Status})
 					return
 				}
 				// still provisioning
@@ -588,6 +641,7 @@ func (a *App) Stop() string {
 		a.activeSlotID = ""
 	}
 	a.status = "logged_in"
+	a.lastError = ""
 	a.mu.Unlock()
 
 	return "ok"

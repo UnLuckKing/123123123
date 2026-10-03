@@ -146,6 +146,27 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	export class NoAccountI18n {
+	    title: string;
+	    message: string;
+	    open_client: string;
+	    retry: string;
+	    close: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NoAccountI18n(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.message = source["message"];
+	        this.open_client = source["open_client"];
+	        this.retry = source["retry"];
+	        this.close = source["close"];
+	    }
+	}
 
 }
 

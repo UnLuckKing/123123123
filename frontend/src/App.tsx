@@ -29,7 +29,12 @@ import {
   ReconnectGame,
   DismissPostGame,
   StopAutoAccept,
+  GetLastError,
+  ClearLastError,
+  GetLocale,
+  LaunchRiotClient,
 } from "../wailsjs/go/main/App";
+import { getNoAccountStrings, isNoAccountError } from "./i18n";
 
 type Page = "home" | "main" | "scout" | "config" | "profile";
 
@@ -216,12 +221,93 @@ function App() {
     );
   };
 
+  const [locale, setLocale] = useState("");
+
+  const isNoAccount = isNoAccountError(error);
+
+  const renderNoAccountCard = () => {
+    const t = getNoAccountStrings(locale);
+    return (
+      <div className="no-account-card">
+        <div className="no-account-header">
+          <div className="no-account-icon-wrap">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+              <line x1="18" y1="8" x2="23" y2="13" />
+              <line x1="23" y1="8" x2="18" y2="13" />
+            </svg>
+          </div>
+          <div className="no-account-title-wrap">
+            <h3 className="no-account-title">{t.title}</h3>
+            <span className="no-account-badge">Riot Client</span>
+          </div>
+        </div>
+        <p className="no-account-message">{t.message}</p>
+        <div className="no-account-actions">
+          <button 
+            className="no-account-btn-primary" 
+            onClick={async () => {
+              showToast(t.openClient + "...");
+              try {
+                await LaunchRiotClient();
+              } catch (e: any) {
+                showToast("Launch failed: " + (e?.message || e));
+              }
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+            <span>{t.openClient}</span>
+          </button>
+          <button 
+            className="no-account-btn-secondary" 
+            onClick={async () => {
+              try { await ClearLastError(); } catch {}
+              setError("");
+              handleStartMain();
+            }}
+          >
+            <span>{t.retry}</span>
+          </button>
+          <button 
+            className="no-account-btn-ghost" 
+            onClick={async () => {
+              try { await ClearLastError(); } catch {}
+              setError("");
+            }}
+          >
+            <span>{t.close}</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderErrorOrNoAccount = (extraMargin = false) => {
+    if (!error) return null;
+    if (isNoAccount) {
+      return renderNoAccountCard();
+    }
+    return <div className="error error-bar" style={extraMargin ? { marginTop: 12 } : undefined}>{error}</div>;
+  };
+
   useEffect(() => {
     GetPlatform().then(setPlatform);
     FindRCS().then((p) => { if (p) setRcsPath(p); });
+    GetLocale().then(setLocale).catch(() => {});
 
     pollRef.current = window.setInterval(async () => {
-      try { setStatus(await GetStatus()); } catch {}
+      try { 
+        setStatus(await GetStatus()); 
+        const lastErr = await GetLastError();
+        if (lastErr) {
+          setError(lastErr);
+        }
+      } catch {}
     }, 1000);
 
     // Latency & health check
@@ -312,6 +398,7 @@ function App() {
 
   const handleLogin = async () => {
     setError("");
+    try { await ClearLastError(); } catch {}
     const res = await Login(username, "");
     if (res === "ok") {
       localStorage.setItem("vanta_user", username);
@@ -323,18 +410,21 @@ function App() {
 
   const handleLogout = async () => {
     await Logout();
+    try { await ClearLastError(); } catch {}
     localStorage.removeItem("vanta_user");
     setUsername(""); setLicense(null); setError(""); setPage("home");
   };
 
   const handleStartMain = async () => {
     setError("");
+    try { await ClearLastError(); } catch {}
     const res = await PrepareLogin(rcsPath);
     if (res !== "ok") setError(res);
   };
 
   const handleStop = async () => {
     setError("");
+    try { await ClearLastError(); } catch {}
     const res = await Stop();
     if (res !== "ok" && res !== "nothing to stop") setError(res);
   };
@@ -532,7 +622,7 @@ function App() {
               ) : "Sign In"}
             </button>
           </div>
-          {error && <div className="error" style={{ marginTop: 12 }}>{error}</div>}
+          {renderErrorOrNoAccount(true)}
           <div className="login-socials">
             <button 
               className="social-btn social-btn-discord" 
@@ -684,7 +774,7 @@ function App() {
             </div>
           )}
 
-          {error && <div className="error error-bar">{error}</div>}
+          {renderErrorOrNoAccount()}
           {toast && <div className="error-bar" style={{ color: '#00f2fe' }}>{toast}</div>}
 
           <div className="home-cards">
@@ -787,7 +877,7 @@ function App() {
         <div className="main-wrap">
           {renderNavbar("main")}
 
-          {error && <div className="error error-bar">{error}</div>}
+          {renderErrorOrNoAccount()}
 
           <div className="mode-content">
             <div className={`status-orb orb-purple${mainOn ? " orb--active" : ""}`}>
@@ -839,7 +929,7 @@ function App() {
             <button className="btn-ghost" onClick={handleFetchLobbyScout}>{scouting ? "Scouting..." : "Refresh"}</button>
           ))}
 
-          {error && <div className="error error-bar">{error}</div>}
+          {renderErrorOrNoAccount()}
           {toast && <div className="error-bar" style={{ color: '#00f2fe' }}>{toast}</div>}
 
           <div className="mode-content">
@@ -929,7 +1019,7 @@ function App() {
             </button>
           ))}
 
-          {error && <div className="error error-bar">{error}</div>}
+          {renderErrorOrNoAccount()}
           {toast && <div className="error-bar" style={{ color: '#10b981' }}>{toast}</div>}
 
           <div className="mode-content">
@@ -1018,7 +1108,7 @@ function App() {
       <div className="main-wrap">
         {renderNavbar("profile")}
 
-        {error && <div className="error error-bar">{error}</div>}
+        {renderErrorOrNoAccount()}
         {toast && <div className="error-bar" style={{ color: '#f59e0b' }}>{toast}</div>}
 
         <div className="mode-content">

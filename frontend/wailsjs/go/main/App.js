@@ -14,6 +14,10 @@ export function ClaimRewards() {
   return window['go']['main']['App']['ClaimRewards']();
 }
 
+export function ClearLastError() {
+  return window['go']['main']['App']['ClearLastError']();
+}
+
 export function ConcludeMatch() {
   return window['go']['main']['App']['ConcludeMatch']();
 }
@@ -46,6 +50,10 @@ export function GetConfigProfiles() {
   return window['go']['main']['App']['GetConfigProfiles']();
 }
 
+export function GetLastError() {
+  return window['go']['main']['App']['GetLastError']();
+}
+
 export function GetLicenseInfo() {
   return window['go']['main']['App']['GetLicenseInfo']();
 }
@@ -54,12 +62,24 @@ export function GetLobbyScout() {
   return window['go']['main']['App']['GetLobbyScout']();
 }
 
+export function GetLocale() {
+  return window['go']['main']['App']['GetLocale']();
+}
+
+export function GetNoAccountI18n(arg1) {
+  return window['go']['main']['App']['GetNoAccountI18n'](arg1);
+}
+
 export function GetPlatform() {
   return window['go']['main']['App']['GetPlatform']();
 }
 
 export function GetStatus() {
   return window['go']['main']['App']['GetStatus']();
+}
+
+export function LaunchRiotClient() {
+  return window['go']['main']['App']['LaunchRiotClient']();
 }
 
 export function Login(arg1, arg2) {

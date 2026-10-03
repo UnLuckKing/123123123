@@ -2,6 +2,8 @@
 
 package main
 
+import "os/exec"
+
 func terminateRiotServices() {}
 
 func isLeagueClientRunning() bool { return false }
@@ -15,3 +17,7 @@ func waitRiotThenClose(proxy *LeagueProxy) {
 }
 
 func clearRiotLogs() {}
+
+func hideCmd(cmd *exec.Cmd) *exec.Cmd {
+	return cmd
+}
