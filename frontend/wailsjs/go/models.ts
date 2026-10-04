@@ -74,6 +74,50 @@ export namespace main {
 	        this.metadata = source["metadata"];
 	    }
 	}
+	export class InjectorEngineInfo {
+	    id: string;
+	    name: string;
+	    description: string;
+	    tag: string;
+	    is_installed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new InjectorEngineInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.tag = source["tag"];
+	        this.is_installed = source["is_installed"];
+	    }
+	}
+	export class InjectorStatus {
+	    selected_engine: string;
+	    auto_inject: boolean;
+	    game_detected: boolean;
+	    game_pid: number;
+	    status_text: string;
+	    injected: boolean;
+	    custom_path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InjectorStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.selected_engine = source["selected_engine"];
+	        this.auto_inject = source["auto_inject"];
+	        this.game_detected = source["game_detected"];
+	        this.game_pid = source["game_pid"];
+	        this.status_text = source["status_text"];
+	        this.injected = source["injected"];
+	        this.custom_path = source["custom_path"];
+	    }
+	}
 	export class LobbyTeammate {
 	    puuid: string;
 	    summoner_name: string;

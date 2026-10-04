@@ -1136,43 +1136,72 @@ def capture_game_engine_loop(slot: SlotState):
                     mode_str = "DIRECT (15-25ms)" if DIRECT_UDP_ROUTE else f"UDP PROXY {slot.udp_proxy_port} (100ms)"
                     record_telemetry("INFO", "3D_GAME_ENGINE_CAPTURED", f"Target: {target_ip}:{target_port} -> Mode: {mode_str}", slot.client_ip, slot.slot_num, slot.slot_id, extra={"engine_pid": pid, "target_ip": target_ip, "target_port": target_port, "udp_proxy_port": slot.udp_proxy_port, "direct_udp": DIRECT_UDP_ROUTE})
                     try:
-                        os.kill(pid, signal.SIGSTOP)
-                        log(f"[game_monitor:slot{slot.slot_num}] Suspended (SIGSTOP) Mac 3D engine PID {pid} to keep parent LeagueClient in 'InProgress' phase")
+                        os.kill(pid, signal.SIGKILL)
+                        log(f"[game_monitor:slot{slot.slot_num}] Headless memory purge: Terminated Mac 3D engine PID {pid} (~1.8GB RAM freed). Match active on Windows.")
+                        record_telemetry("INFO", "MAC_ENGINE_KILLED_RAM_PURGED", f"Terminated PID {pid} to reclaim 1.8GB RAM", slot.client_ip, slot.slot_num, slot.slot_id)
                         try:
                             subprocess.run(["purge"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         except Exception:
                             pass
                     except Exception as err:
-                        log(f"[game_monitor:slot{slot.slot_num}] Error suspending Mac game: {err}")
+                        log(f"[game_monitor:slot{slot.slot_num}] Note terminating Mac game engine PID {pid}: {err}")
 
-                    while True:
-                        time.sleep(1.0)
+                    concluded_engine_pids.add(pid)
+                    if len(concluded_engine_pids) > 512:
+                        concluded_engine_pids.pop()
+
+                    auth_hdr = None
+                    if slot.rc_token:
+                        auth_hdr = base64.b64encode(f"riot:{slot.rc_token}".encode()).decode()
+
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+
+                    match_active = True
+                    consecutive_non_ingame = 0
+                    lcu_poll_failures = 0
+
+                    while match_active:
+                        time.sleep(2.0)
                         with slots_lock:
                             if not slot_is_current(slot, generation):
                                 return
-                        if slot.engine_pid is None and len(slot.game_args) == 0:
-                            concluded_engine_pids.add(pid)
-                            if len(concluded_engine_pids) > 512:
-                                concluded_engine_pids.pop()
-                            record_telemetry("INFO", "MATCH_CONCLUDED_MONITOR_RESET", "3D Game Engine reset cleanly", slot.client_ip, slot.slot_num, slot.slot_id)
-                            log(f"[game_monitor:slot{slot.slot_num}] Match concluded cleanly for PID {pid}. Ready for next match.")
-                            break
-                        try:
-                            os.kill(pid, 0)
-                        except OSError:
-                            with slots_lock:
-                                if slot.engine_pid == pid:
-                                    slot.engine_pid = None
-                                    slot.game_args = []
-                            concluded_engine_pids.add(pid)
-                            if len(concluded_engine_pids) > 512:
-                                concluded_engine_pids.pop()
-                            record_telemetry("INFO", "MATCH_CONCLUDED_MONITOR_RESET", "3D Game Engine terminated on Mac", slot.client_ip, slot.slot_num, slot.slot_id)
-                            log(f"[game_monitor:slot{slot.slot_num}] 3D Game Engine PID {pid} exited on Mac. Ready for next match.")
-                            break
+                            if slot.engine_pid is None and len(slot.game_args) == 0:
+                                match_active = False
+                                break
+
+                        if slot.app_port and auth_hdr:
+                            try:
+                                gf_req = urllib.request.Request(
+                                    f"https://127.0.0.1:{slot.app_port}/lol-gameflow/v1/gameflow-phase",
+                                    headers={"Authorization": f"Basic {auth_hdr}"}
+                                )
+                                with urllib.request.urlopen(gf_req, context=ctx, timeout=3) as resp:
+                                    phase = resp.read().decode().strip('"\r\n ')
+                                    lcu_poll_failures = 0
+                                    if phase not in ("InProgress", "Reconnect"):
+                                        consecutive_non_ingame += 1
+                                        if consecutive_non_ingame >= 3:
+                                            match_active = False
+                                            break
+                                    else:
+                                        consecutive_non_ingame = 0
+                            except Exception:
+                                lcu_poll_failures += 1
+                                if lcu_poll_failures > 45:
+                                    match_active = False
+                                    break
+
+                    with slots_lock:
+                        slot.engine_pid = None
+                        slot.game_args = []
+                    record_telemetry("INFO", "MATCH_CONCLUDED_MONITOR_RESET", "3D Game Engine reset cleanly", slot.client_ip, slot.slot_num, slot.slot_id)
+                    log(f"[game_monitor:slot{slot.slot_num}] Match concluded cleanly. Slot ready for next match.")
+                    break
         except Exception as e:
             log(f"[game_monitor:slot{slot.slot_num}] error: {e}")
-        time.sleep(1.0)
+        time.sleep(0.3)
 
 def suppress_electron_ui_for_slot(slot: SlotState, generation: str):
     """
@@ -1214,6 +1243,17 @@ def vm_worker(slot: SlotState, yaml_data: str):
         if not os.path.exists(slot.app_path):
             record_telemetry("INFO", "APFS_CLONING", f"Creating instant APFS clone: {slot.app_path}", slot.client_ip, slot.slot_num, slot.slot_id)
             subprocess.run(f"cp -c -R '{BASE_APP_PATH}' '{slot.app_path}'", shell=True)
+
+        # Ensure zero-RAM headless game engine shim is active in this slot (~1.8GB RAM saved)
+        slot_engine_bin = os.path.join(slot.app_path, "Contents", "LoL", "Game", "LeagueofLegends.app", "Contents", "MacOS", "LeagueofLegends")
+        if os.path.exists("/Users/m1/LeagueofLegends_shim") and os.path.exists(slot_engine_bin):
+            try:
+                if os.path.getsize(slot_engine_bin) > 500000:
+                    import shutil
+                    shutil.copyfile("/Users/m1/LeagueofLegends_shim", slot_engine_bin)
+                    os.chmod(slot_engine_bin, 0o755)
+            except Exception:
+                pass
 
         # Remove any lingering lockfile inside the slot's app bundle
         slot_app_lock = os.path.join(slot.app_path, "Contents", "LoL", "lockfile")

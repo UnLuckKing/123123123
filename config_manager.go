@@ -25,15 +25,24 @@ type ConfigProfileInfo struct {
 	IsActive     bool     `json:"is_active"`
 }
 
+// VantaConfigState defines persistent user configuration preferences.
+type VantaConfigState struct {
+	ActiveProfile             string `json:"active_profile"`
+	KeepConfigOnAccountSwitch bool   `json:"keep_config_on_account_switch"`
+	AutoSyncEnabled           bool   `json:"auto_sync_enabled"`
+	ReadOnlyLock              bool   `json:"read_only_lock"`
+}
+
 // ConfigManager handles backing up, restoring, swapping, and auto-syncing League configs across accounts.
 type ConfigManager struct {
-	mu              sync.Mutex
-	configDir       string
-	profilesDir     string
-	activeProfile   string
-	autoSyncEnabled bool
-	autoSyncStopCh  chan struct{}
-	lastHash        string
+	mu                        sync.Mutex
+	configDir                 string
+	profilesDir               string
+	activeProfile             string
+	keepConfigOnAccountSwitch bool
+	autoSyncEnabled           bool
+	autoSyncStopCh            chan struct{}
+	lastHash                  string
 }
 
 var globalConfigManager *ConfigManager
@@ -47,15 +56,25 @@ func GetConfigManager() *ConfigManager {
 		_ = os.MkdirAll(profDir, 0755)
 
 		globalConfigManager = &ConfigManager{
-			configDir:     cfgDir,
-			profilesDir:   profDir,
-			activeProfile: "MasterProfile",
+			configDir:                 cfgDir,
+			profilesDir:               profDir,
+			activeProfile:             "Faker (T1)",
+			keepConfigOnAccountSwitch: true,
+			autoSyncEnabled:           true,
 		}
+
+		// Load persistent state from disk
+		globalConfigManager.loadStateInternal()
 
 		// Automatically preserve authentic player configuration backup if not already saved
 		origBackup := filepath.Join(profDir, "Original_Backup")
 		if _, statErr := os.Stat(origBackup); os.IsNotExist(statErr) {
 			_ = globalConfigManager.SaveCurrentProfile("Original_Backup", "Original League Settings Backup (Auto-Preserved)")
+		}
+
+		// Start guardian if keepConfigOnAccountSwitch or autoSyncEnabled is active
+		if globalConfigManager.keepConfigOnAccountSwitch || globalConfigManager.autoSyncEnabled {
+			globalConfigManager.StartAutoSyncDaemon(globalConfigManager.activeProfile)
 		}
 	})
 	return globalConfigManager
@@ -268,6 +287,7 @@ func (cm *ConfigManager) ApplyProfile(profileName string) error {
 	}
 
 	cm.activeProfile = profileName
+	cm.saveStateInternal()
 
 	// If League client is running, notify LCU to reload post-game settings
 	go func() {
@@ -423,6 +443,80 @@ func (cm *ConfigManager) IsAutoSyncEnabled() bool {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	return cm.autoSyncEnabled
+}
+
+func (cm *ConfigManager) getStateFilePath() string {
+	return filepath.Join(cm.profilesDir, "vanta_config_state.json")
+}
+
+func (cm *ConfigManager) saveStateInternal() {
+	st := VantaConfigState{
+		ActiveProfile:             cm.activeProfile,
+		KeepConfigOnAccountSwitch: cm.keepConfigOnAccountSwitch,
+		AutoSyncEnabled:           cm.autoSyncEnabled,
+		ReadOnlyLock:              isWindowsFileReadOnly(filepath.Join(cm.configDir, "PersistedSettings.json")),
+	}
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(cm.getStateFilePath(), data, 0644)
+	}
+}
+
+func (cm *ConfigManager) loadStateInternal() {
+	data, err := os.ReadFile(cm.getStateFilePath())
+	if err != nil {
+		cm.activeProfile = "Faker (T1)"
+		cm.keepConfigOnAccountSwitch = true
+		cm.autoSyncEnabled = true
+		cm.saveStateInternal()
+		return
+	}
+	var st VantaConfigState
+	if json.Unmarshal(data, &st) == nil {
+		if st.ActiveProfile != "" {
+			cm.activeProfile = st.ActiveProfile
+		} else {
+			cm.activeProfile = "Faker (T1)"
+		}
+		cm.keepConfigOnAccountSwitch = st.KeepConfigOnAccountSwitch
+		cm.autoSyncEnabled = st.AutoSyncEnabled
+	} else {
+		cm.activeProfile = "Faker (T1)"
+		cm.keepConfigOnAccountSwitch = true
+		cm.autoSyncEnabled = true
+	}
+}
+
+// SetKeepConfigOnAccountSwitch enables or disables locking active config across accounts.
+func (cm *ConfigManager) SetKeepConfigOnAccountSwitch(keep bool) {
+	cm.mu.Lock()
+	cm.keepConfigOnAccountSwitch = keep
+	profile := cm.activeProfile
+	cm.saveStateInternal()
+	cm.mu.Unlock()
+
+	if keep {
+		cm.StartAutoSyncDaemon(profile)
+	}
+}
+
+// GetKeepConfigOnAccountSwitch reports whether active config is preserved across accounts.
+func (cm *ConfigManager) GetKeepConfigOnAccountSwitch() bool {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.keepConfigOnAccountSwitch
+}
+
+// EnsureActiveProfileEnforced writes the active configuration profile before launching League.
+func (cm *ConfigManager) EnsureActiveProfileEnforced() {
+	cm.mu.Lock()
+	keep := cm.keepConfigOnAccountSwitch
+	prof := cm.activeProfile
+	cm.mu.Unlock()
+
+	if keep && prof != "" {
+		_ = cm.ApplyProfile(prof)
+	}
 }
 
 // --- Windows File Attribute Helpers ---

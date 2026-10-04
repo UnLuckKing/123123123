@@ -332,6 +332,8 @@ func (a *App) PrepareLogin(rcsPath string) string {
 				a.status = "running"
 				a.lastError = ""
 				a.mu.Unlock()
+				// Enforce persistent configuration profile across account switch
+				GetConfigManager().EnsureActiveProfileEnforced()
 				if err := LaunchLeagueClientLocally(statusResp.Args, proxyPort, lcuPort); err != nil {
 					a.logDebug("[bypass] launch error: %v", err)
 					ReportGlobalTelemetry("CRITICAL", "CLIENT_BYPASS", "Failed to launch local LeagueClient", err.Error(), map[string]interface{}{"slot_id": slotID})
@@ -947,10 +949,22 @@ func (a *App) SetAutoConfigSync(enabled bool, profileName string) string {
 func (a *App) GetAutoConfigSyncStatus() map[string]interface{} {
 	cm := GetConfigManager()
 	return map[string]interface{}{
-		"enabled":        cm.IsAutoSyncEnabled(),
-		"active_profile": cm.activeProfile,
-		"read_only":      cm.IsReadOnly(),
+		"enabled":                       cm.IsAutoSyncEnabled(),
+		"active_profile":                cm.activeProfile,
+		"read_only":                     cm.IsReadOnly(),
+		"keep_config_on_account_switch": cm.GetKeepConfigOnAccountSwitch(),
 	}
+}
+
+// SetKeepConfigOnAccountSwitch locks the active configuration profile across accounts.
+func (a *App) SetKeepConfigOnAccountSwitch(enabled bool) string {
+	GetConfigManager().SetKeepConfigOnAccountSwitch(enabled)
+	return "ok"
+}
+
+// GetKeepConfigOnAccountSwitch checks if config locking across accounts is enabled.
+func (a *App) GetKeepConfigOnAccountSwitch() bool {
+	return GetConfigManager().GetKeepConfigOnAccountSwitch()
 }
 
 // ToggleConfigReadOnly write-protects or unlocks PersistedSettings.json.
@@ -960,6 +974,33 @@ func (a *App) ToggleConfigReadOnly(readOnly bool) string {
 		return err.Error()
 	}
 	return "ok"
+}
+
+// --- Wails bindings: Script Engine Injector (Hanbot, LS, Legend2Sense) ---
+
+// GetInjectorEngines returns the available script injector engines.
+func (a *App) GetInjectorEngines() []InjectorEngineInfo {
+	return GetInjectorManager().ListEngines()
+}
+
+// GetInjectorStatus returns live injection status and detected game PID.
+func (a *App) GetInjectorStatus() InjectorStatus {
+	return GetInjectorManager().GetStatus()
+}
+
+// SetInjectorEngine updates the active script engine.
+func (a *App) SetInjectorEngine(engineID string) string {
+	return GetInjectorManager().SetEngine(engineID)
+}
+
+// SetAutoInject toggles auto-inject upon match launch.
+func (a *App) SetAutoInject(enabled bool) string {
+	return GetInjectorManager().SetAutoInject(enabled)
+}
+
+// TriggerInject initiates injection into the active League game.
+func (a *App) TriggerInject() string {
+	return GetInjectorManager().TriggerInject()
 }
 
 // --- Wails bindings: Event Sentinel & Critical Prompts ---

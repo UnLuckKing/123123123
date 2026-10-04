@@ -19,6 +19,13 @@ import {
   SetAutoConfigSync,
   GetAutoConfigSyncStatus,
   ToggleConfigReadOnly,
+  SetKeepConfigOnAccountSwitch,
+  GetKeepConfigOnAccountSwitch,
+  GetInjectorEngines,
+  GetInjectorStatus,
+  SetInjectorEngine,
+  SetAutoInject,
+  TriggerInject,
   GetLobbyScout,
   DodgeLobby,
   SetCustomLobbyStatus,
@@ -36,7 +43,7 @@ import {
 } from "../wailsjs/go/main/App";
 import { getNoAccountStrings, isNoAccountError } from "./i18n";
 
-type Page = "home" | "main" | "scout" | "config" | "profile";
+type Page = "home" | "main" | "scout" | "config" | "injector";
 
 const DISCORD_URL = "https://discord.gg/fpHmB48B6Y";
 const YOUTUBE_URL = "https://www.youtube.com/@Vanta_exe";
@@ -93,9 +100,10 @@ const IconSliders = () => (
   </svg>
 );
 
-const IconCrown = () => (
+const IconInjector = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14v2H5v-2z" />
+    <path d="M18 2l4 4-2 2-4-4 2-2zM15 5l-8 8-2 6 6-2 8-8-4-4zM5 19l-3 3" />
+    <circle cx="12" cy="12" r="1" />
   </svg>
 );
 
@@ -154,17 +162,32 @@ function App() {
   const [profiles, setProfiles] = useState<any[]>([]);
   const [selectedProfile, setSelectedProfile] = useState("Faker (T1)");
   const [autoSyncConfig, setAutoSyncConfig] = useState(false);
+  const [keepConfigAccountSwitch, setKeepConfigAccountSwitch] = useState<boolean>(true);
   const [readOnlyLock, setReadOnlyLock] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
   const [showSaveInput, setShowSaveInput] = useState(false);
 
+  // Script Injector
+  const [injectorEngines] = useState<any[]>([
+    { id: "hanbot", name: "Hanbot", description: "High-precision prediction & orbwalker engine with dynamic evade routing.", tag: "PRO ORBWALKER" },
+    { id: "ls", name: "LS (LegendsSharp)", description: "Modular C# & Lua architecture with open script community ecosystem.", tag: "MODULAR C#" },
+    { id: "legend2sense", name: "Legend2Sense", description: "Next-gen stealth internal memory core with hardware-assisted overlay.", tag: "INTERNAL CORE" }
+  ]);
+  const [selectedEngine, setSelectedEngine] = useState<string>(() => localStorage.getItem("vanta_injector_engine") || "hanbot");
+  const [autoInject, setAutoInjectState] = useState<boolean>(true);
+  const [injectorStatus, setInjectorStatus] = useState<any>({
+    selected_engine: "hanbot",
+    auto_inject: true,
+    game_detected: false,
+    game_pid: 0,
+    status_text: "Standby · Waiting for League Match",
+    injected: false,
+  });
+  const [injecting, setInjecting] = useState<boolean>(false);
+
   // Lobby Scout
   const [lobbyReport, setLobbyReport] = useState<any | null>(null);
   const [scouting, setScouting] = useState(false);
-
-  // Regalia & Presence
-  const [customStatusText, setCustomStatusText] = useState("");
-  const [regaliaTier, setRegaliaTier] = useState("CHALLENGER");
 
   // Critical Prompts (Consent Gate)
   const [criticalPrompt, setCriticalPrompt] = useState<any | null>(null);
@@ -383,6 +406,9 @@ function App() {
         setAutoSyncConfig(Boolean(st.enabled));
         setReadOnlyLock(Boolean(st.read_only));
         if (st.active_profile) setSelectedProfile(st.active_profile);
+        if (st.keep_config_on_account_switch !== undefined) {
+          setKeepConfigAccountSwitch(Boolean(st.keep_config_on_account_switch));
+        }
       }
     } catch {}
   };
@@ -565,30 +591,70 @@ function App() {
     }
   };
 
-  const handleApplyCustomStatus = async () => {
-    if (!customStatusText.trim()) return;
+  const handleToggleKeepConfigAccountSwitch = async () => {
+    const next = !keepConfigAccountSwitch;
+    setKeepConfigAccountSwitch(next);
     try {
-      const res = await SetCustomLobbyStatus(customStatusText.trim());
-      if (res === "ok") {
-        showToast("Status updated in League Client");
-      } else {
-        showToast("Error: " + res);
-      }
-    } catch (err: any) {
-      showToast("Error: " + (err?.message || err));
-    }
+      await SetKeepConfigOnAccountSwitch(next);
+      showToast(next ? `Hesap Değişince Config Koruma Açık: ${selectedProfile}` : "Hesap Değişince Config Koruma Kapalı");
+    } catch {}
   };
 
-  const handleApplyRegalia = async () => {
+  const refreshInjectorStatus = async () => {
     try {
-      const res = await SetRegaliaProfile(regaliaTier, regaliaTier);
-      if (res === "ok") {
-        showToast(`${regaliaTier} Crest applied!`);
-      } else {
-        showToast("Error: " + res);
+      const st = await GetInjectorStatus();
+      if (st) {
+        setInjectorStatus(st);
+        if (st.selected_engine) setSelectedEngine(st.selected_engine);
+        if (st.auto_inject !== undefined) setAutoInjectState(st.auto_inject);
       }
+    } catch {}
+  };
+
+  useEffect(() => {
+    refreshInjectorStatus();
+    const interval = window.setInterval(() => {
+      if (page === "injector" || page === "home") {
+        refreshInjectorStatus();
+      }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [page]);
+
+  const handleSelectEngine = async (engineId: string) => {
+    setSelectedEngine(engineId);
+    localStorage.setItem("vanta_injector_engine", engineId);
+    try {
+      await SetInjectorEngine(engineId);
+      showToast(`Aktif Motor: ${engineId.toUpperCase()}`);
+      await refreshInjectorStatus();
+    } catch {}
+  };
+
+  const handleToggleAutoInject = async () => {
+    const next = !autoInject;
+    setAutoInjectState(next);
+    try {
+      await SetAutoInject(next);
+      showToast(next ? "Oyun Başlayınca Otomatik Enjekte: Açık" : "Otomatik Enjekte: Kapalı");
+      await refreshInjectorStatus();
+    } catch {}
+  };
+
+  const handleTriggerInject = async () => {
+    setInjecting(true);
+    try {
+      const res = await TriggerInject();
+      if (res === "ok") {
+        showToast(`⚡ ${selectedEngine.toUpperCase()} Oyuna Enjekte Edildi!`);
+      } else {
+        showToast(`Enjeksiyon: ${res}`);
+      }
+      await refreshInjectorStatus();
     } catch (err: any) {
-      showToast("Error: " + (err?.message || err));
+      showToast(`Hata: ${err?.message || err}`);
+    } finally {
+      setInjecting(false);
     }
   };
 
@@ -688,11 +754,11 @@ function App() {
           <span>Config</span>
         </div>
         <div
-          className={`topbar-nav-tab${currentPage === "profile" ? " topbar-nav-tab--active" : ""}`}
-          onClick={() => { setError(""); setPage("profile"); }}
-          title="Regalia Forge"
+          className={`topbar-nav-tab${currentPage === "injector" ? " topbar-nav-tab--active" : ""}`}
+          onClick={() => { setError(""); setPage("injector"); }}
+          title="Script Engine Injector"
         >
-          <span>Profile</span>
+          <span>Injector</span>
         </div>
       </div>
       <div className="topbar-end">
@@ -826,17 +892,20 @@ function App() {
               </div>
             </div>
 
-            {/* Card 4: Regalia Forge */}
+            {/* Card 4: Script Injector */}
             <div
-              className="home-card home-card-amber"
-              onClick={() => setPage("profile")}
+              className="home-card home-card-cyan"
+              onClick={() => setPage("injector")}
             >
-              <div className="home-card-icon icon-amber"><IconCrown /></div>
+              <div className="home-card-icon icon-cyan"><IconInjector /></div>
               <div className="home-card-body">
-                <h3 className="home-card-title">Regalia Forge</h3>
-                <p className="home-card-sub">Ranked crest & social status customizer</p>
+                <h3 className="home-card-title">Script Injector</h3>
+                <p className="home-card-sub">Hanbot · LS · Legend2Sense runtime</p>
               </div>
               <div className="home-card-end">
+                <span className={`card-tag ${injectorStatus.game_detected ? "card-tag-green" : "card-tag-cyan"}`}>
+                  {injectorStatus.game_detected ? "GAME READY" : selectedEngine.toUpperCase()}
+                </span>
                 <span className="home-card-chevron"><IconChevron /></span>
               </div>
             </div>
@@ -1063,6 +1132,16 @@ function App() {
 
             <div className="detail-panel">
               <div className="detail-row">
+                <span className="detail-key">Hesap Değişince Config'i Koru</span>
+                <span 
+                  className={`detail-val ${keepConfigAccountSwitch ? "val-on" : ""}`}
+                  style={{ cursor: 'pointer' }}
+                  onClick={handleToggleKeepConfigAccountSwitch}
+                >
+                  {keepConfigAccountSwitch ? "Kilitli (Aktif)" : "Devre Dışı"}
+                </span>
+              </div>
+              <div className="detail-row">
                 <span className="detail-key">Auto-Sync on Switch</span>
                 <span 
                   className={`detail-val ${autoSyncConfig ? "val-on" : ""}`}
@@ -1101,56 +1180,78 @@ function App() {
     );
   }
 
-  /* ─── 6. REGALIA FORGE PAGE ─── */
+  /* ─── 6. SCRIPT INJECTOR PAGE ─── */
   return (
     <div className="app screen-main">
       <div className="mesh-bg" />
       <div className="main-wrap">
-        {renderNavbar("profile")}
+        {renderNavbar("injector", (
+          <button className="btn-ghost" onClick={refreshInjectorStatus}>
+            Refresh
+          </button>
+        ))}
 
         {renderErrorOrNoAccount()}
-        {toast && <div className="error-bar" style={{ color: '#f59e0b' }}>{toast}</div>}
+        {toast && <div className="error-bar" style={{ color: '#00f2fe' }}>{toast}</div>}
 
         <div className="mode-content">
-          <div className="status-orb orb-amber orb--active">
-            <div className="orb-icon"><IconCrown /></div>
-            <div className="orb-ring orb-ring-amber" />
+          <div className={`status-orb ${injectorStatus.game_detected ? "orb-emerald orb--active" : "orb-cyan"}`}>
+            <div className="orb-icon"><IconInjector /></div>
+            {injectorStatus.game_detected && <div className="orb-ring orb-ring-emerald" />}
           </div>
 
-          <h2 className="mode-label">{regaliaTier} Regalia</h2>
-          <p className="mode-detail">Ranked crest & social status customizer</p>
+          <h2 className="mode-label">Script Injector</h2>
+          <p className="mode-detail">{injectorStatus.status_text}</p>
 
-          <div style={{ width: '100%', maxWidth: 300, marginBottom: 12 }}>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input 
-                className="field" 
-                type="text" 
-                placeholder="Custom status message" 
-                value={customStatusText}
-                onChange={(e) => setCustomStatusText(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleApplyCustomStatus()}
-              />
-              <button className="btn-ghost" onClick={handleApplyCustomStatus}>Set</button>
+          {/* 3 Engine Cards: Hanbot, LS, Legend2Sense */}
+          <div className="engine-select-grid">
+            {injectorEngines.map((eng) => (
+              <div
+                key={eng.id}
+                className={`engine-card ${selectedEngine === eng.id ? "engine-card--active" : ""}`}
+                onClick={() => handleSelectEngine(eng.id)}
+              >
+                <div className="engine-card-header">
+                  <span className="engine-name">{eng.name}</span>
+                  <span className="engine-tag">{eng.tag}</span>
+                </div>
+                <p className="engine-desc">{eng.description}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="detail-panel" style={{ marginTop: 14 }}>
+            <div className="detail-row">
+              <span className="detail-key">Auto-Inject on Match</span>
+              <span 
+                className={`detail-val ${autoInject ? "val-on" : ""}`}
+                style={{ cursor: 'pointer' }}
+                onClick={handleToggleAutoInject}
+              >
+                {autoInject ? "Enabled (Auto)" : "Manual"}
+              </span>
+            </div>
+            <div className="detail-row">
+              <span className="detail-key">Target Process</span>
+              <span className={`detail-val ${injectorStatus.game_detected ? "val-on" : ""}`}>
+                {injectorStatus.game_detected ? `League of Legends.exe [PID ${injectorStatus.game_pid}]` : "Not Detected"}
+              </span>
+            </div>
+            <div className="detail-row">
+              <span className="detail-key">Active Engine</span>
+              <span className="detail-val val-on">
+                {selectedEngine.toUpperCase()}
+              </span>
             </div>
           </div>
 
-          <div style={{ width: '100%', maxWidth: 300 }}>
-            <div className="tier-grid-compact">
-              {REGALIA_TIERS.map((tier) => (
-                <button
-                  key={tier.id}
-                  className={`tier-btn-compact ${regaliaTier === tier.id ? "tier-btn-compact--active" : ""}`}
-                  onClick={() => setRegaliaTier(tier.id)}
-                >
-                  {tier.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mode-action">
-            <button className="btn-big btn-big-amber" onClick={handleApplyRegalia}>
-              Apply Crest to Client
+          <div className="mode-action" style={{ marginTop: 18 }}>
+            <button 
+              className={`btn-big ${injectorStatus.game_detected ? "btn-big-emerald" : "btn-big-cyan"}`} 
+              onClick={handleTriggerInject}
+              disabled={injecting}
+            >
+              {injecting ? "Injecting..." : `Inject ${selectedEngine.toUpperCase()} to Game`}
             </button>
           </div>
         </div>

@@ -26,6 +26,12 @@ export function GetChampSelectRule():Promise<main.ChampSelectRule>;
 
 export function GetConfigProfiles():Promise<Array<main.ConfigProfileInfo>>;
 
+export function GetInjectorEngines():Promise<Array<main.InjectorEngineInfo>>;
+
+export function GetInjectorStatus():Promise<main.InjectorStatus>;
+
+export function GetKeepConfigOnAccountSwitch():Promise<boolean>;
+
 export function GetLastError():Promise<string>;
 
 export function GetLicenseInfo():Promise<Record<string, any>>;
@@ -60,9 +66,15 @@ export function SaveCurrentConfigProfile(arg1:string,arg2:string):Promise<string
 
 export function SetAutoConfigSync(arg1:boolean,arg2:string):Promise<string>;
 
+export function SetAutoInject(arg1:boolean):Promise<string>;
+
 export function SetChampSelectRule(arg1:main.ChampSelectRule):Promise<string>;
 
 export function SetCustomLobbyStatus(arg1:string):Promise<string>;
+
+export function SetInjectorEngine(arg1:string):Promise<string>;
+
+export function SetKeepConfigOnAccountSwitch(arg1:boolean):Promise<string>;
 
 export function SetRegaliaProfile(arg1:string,arg2:string):Promise<string>;
 
@@ -75,3 +87,5 @@ export function StopAutoAccept():Promise<string>;
 export function StopWorker():Promise<string>;
 
 export function ToggleConfigReadOnly(arg1:boolean):Promise<string>;
+
+export function TriggerInject():Promise<string>;

@@ -50,6 +50,18 @@ export function GetConfigProfiles() {
   return window['go']['main']['App']['GetConfigProfiles']();
 }
 
+export function GetInjectorEngines() {
+  return window['go']['main']['App']['GetInjectorEngines']();
+}
+
+export function GetInjectorStatus() {
+  return window['go']['main']['App']['GetInjectorStatus']();
+}
+
+export function GetKeepConfigOnAccountSwitch() {
+  return window['go']['main']['App']['GetKeepConfigOnAccountSwitch']();
+}
+
 export function GetLastError() {
   return window['go']['main']['App']['GetLastError']();
 }
@@ -118,12 +130,24 @@ export function SetAutoConfigSync(arg1, arg2) {
   return window['go']['main']['App']['SetAutoConfigSync'](arg1, arg2);
 }
 
+export function SetAutoInject(arg1) {
+  return window['go']['main']['App']['SetAutoInject'](arg1);
+}
+
 export function SetChampSelectRule(arg1) {
   return window['go']['main']['App']['SetChampSelectRule'](arg1);
 }
 
 export function SetCustomLobbyStatus(arg1) {
   return window['go']['main']['App']['SetCustomLobbyStatus'](arg1);
+}
+
+export function SetInjectorEngine(arg1) {
+  return window['go']['main']['App']['SetInjectorEngine'](arg1);
+}
+
+export function SetKeepConfigOnAccountSwitch(arg1) {
+  return window['go']['main']['App']['SetKeepConfigOnAccountSwitch'](arg1);
 }
 
 export function SetRegaliaProfile(arg1, arg2) {
@@ -148,4 +172,8 @@ export function StopWorker() {
 
 export function ToggleConfigReadOnly(arg1) {
   return window['go']['main']['App']['ToggleConfigReadOnly'](arg1);
+}
+
+export function TriggerInject() {
+  return window['go']['main']['App']['TriggerInject']();
 }
